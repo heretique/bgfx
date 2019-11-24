@@ -3,7 +3,7 @@
  * License: https://github.com/bkaradzic/bgfx#license-bsd-2-clause
  */
 
-#include "shaderc.h"
+#include "shaderc_private.h"
 
 #if SHADERC_CONFIG_HLSL
 
@@ -545,7 +545,7 @@ namespace bgfx { namespace hlsl
 		return true;
 	}
 
-	static bool compile(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer, bool _firstPass)
+    static bool compile(const ShaderCompileOptions& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer, bool _firstPass)
 	{
 		const char* profile = _options.profile.c_str();
 
@@ -813,7 +813,7 @@ namespace bgfx { namespace hlsl
 
 } // namespace hlsl
 
-	bool compileHLSLShader(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer)
+    bool compileHLSLShader(const ShaderCompileOptions& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer)
 	{
 		return hlsl::compile(_options, _version, _code, _writer, true);
 	}
@@ -824,7 +824,7 @@ namespace bgfx { namespace hlsl
 
 namespace bgfx
 {
-	bool compileHLSLShader(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer)
+	bool compileHLSLShader(const ShaderCompileOptions& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer)
 	{
 		BX_UNUSED(_options, _version, _code, _writer);
 		fprintf(stderr, "HLSL compiler is not supported on this platform.\n");

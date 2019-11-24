@@ -3,7 +3,7 @@
  * License: https://github.com/bkaradzic/bgfx#license-bsd-2-clause
  */
 
-#include "shaderc.h"
+#include "shaderc_private.h"
 
 BX_PRAGMA_DIAGNOSTIC_PUSH()
 BX_PRAGMA_DIAGNOSTIC_IGNORED_MSVC(4100) // error C4100: 'inclusionDepth' : unreferenced formal parameter
@@ -613,7 +613,7 @@ namespace bgfx { namespace metal
 		return size;
 	}
 
-	static bool compile(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer, bool _firstPass)
+    static bool compile(const ShaderCompileOptions& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer, bool _firstPass)
 	{
 		BX_UNUSED(_version);
 
@@ -1023,7 +1023,7 @@ namespace bgfx { namespace metal
 
 } // namespace metal
 
-	bool compileMetalShader(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer)
+	bool compileMetalShader(const ShaderCompileOptions& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer)
 	{
 		return metal::compile(_options, _version, _code, _writer, true);
 	}

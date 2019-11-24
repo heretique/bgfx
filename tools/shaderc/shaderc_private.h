@@ -3,8 +3,8 @@
  * License: https://github.com/bkaradzic/bgfx#license-bsd-2-clause
  */
 
-#ifndef SHADERC_H_HEADER_GUARD
-#define SHADERC_H_HEADER_GUARD
+#ifndef SHADERC_PRIVATE_H_HEADER_GUARD
+#define SHADERC_PRIVATE_H_HEADER_GUARD
 
 namespace bgfx
 {
@@ -61,6 +61,7 @@ namespace bgfx
 #include <bx/hash.h>
 #include <bx/file.h>
 #include "../../src/vertexdecl.h"
+#include "shaderc.h"
 
 namespace bgfx
 {
@@ -122,42 +123,6 @@ namespace bgfx
 		uint16_t regCount;
 	};
 
-	struct Options
-	{
-		Options();
-
-		void dump();
-
-		char shaderType;
-		std::string platform;
-		std::string profile;
-
-		std::string	inputFilePath;
-		std::string	outputFilePath;
-
-		std::vector<std::string> includeDirs;
-		std::vector<std::string> defines;
-		std::vector<std::string> dependencies;
-
-		bool disasm;
-		bool raw;
-		bool preprocessOnly;
-		bool depends;
-
-		bool debugInformation;
-
-		bool avoidFlowControl;
-		bool noPreshader;
-		bool partialPrecision;
-		bool preferFlowControl;
-		bool backwardsCompatibility;
-		bool warningsAreErrors;
-		bool keepIntermediate;
-
-		bool optimize;
-		uint32_t optimizationLevel;
-	};
-
 	typedef std::vector<Uniform> UniformArray;
 
 	void printCode(const char* _code, int32_t _line = 0, int32_t _start = 0, int32_t _end = INT32_MAX, int32_t _column = -1);
@@ -165,14 +130,14 @@ namespace bgfx
 	int32_t writef(bx::WriterI* _writer, const char* _format, ...);
 	void writeFile(const char* _filePath, const void* _data, int32_t _size);
 
-	bool compileGLSLShader(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer);
-	bool compileHLSLShader(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer);
-	bool compileMetalShader(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer);
-	bool compilePSSLShader(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer);
-	bool compileSPIRVShader(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer);
+	bool compileGLSLShader(const ShaderCompileOptions& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer);
+	bool compileHLSLShader(const ShaderCompileOptions& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer);
+	bool compileMetalShader(const ShaderCompileOptions& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer);
+	bool compilePSSLShader(const ShaderCompileOptions& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer);
+	bool compileSPIRVShader(const ShaderCompileOptions& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer);
 
 	const char* getPsslPreamble();
 
 } // namespace bgfx
 
-#endif // SHADERC_H_HEADER_GUARD
+#endif // SHADERC_PRIVATE_H_HEADER_GUARD

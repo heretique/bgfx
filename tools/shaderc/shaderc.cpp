@@ -3,7 +3,7 @@
  * License: https://github.com/bkaradzic/bgfx#license-bsd-2-clause
  */
 
-#include "shaderc.h"
+#include "shaderc_private.h"
 #include <bx/commandline.h>
 #include <bx/filepath.h>
 
@@ -184,7 +184,7 @@ namespace bgfx
 		NULL
 	};
 
-	Options::Options()
+	ShaderCompileOptions::ShaderCompileOptions()
 		: shaderType(' ')
 		, disasm(false)
 		, raw(false)
@@ -203,9 +203,9 @@ namespace bgfx
 	{
 	}
 
-	void Options::dump()
+	void ShaderCompileOptions::dump()
 	{
-		BX_TRACE("Options:\n"
+		BX_TRACE("ShaderCompileOptions:\n"
 			"\t  shaderType: %c\n"
 			"\t  platform: %s\n"
 			"\t  profile: %s\n"
@@ -928,7 +928,7 @@ namespace bgfx
 		return word;
 	}
 
-	bool compileShader(const char* _varying, const char* _comment, char* _shader, uint32_t _shaderLen, Options& _options, bx::FileWriter* _writer)
+	bool compileShader(const char* _varying, const char* _comment, char* _shader, uint32_t _shaderLen, ShaderCompileOptions& _options, bx::WriterI* _writer)
 	{
 		uint32_t glsl  = 0;
 		uint32_t essl  = 0;
@@ -2321,6 +2321,8 @@ namespace bgfx
 		return compiled;
 	}
 
+#ifdef SHADERC_STANDALONE
+
 	int compileShader(int _argc, const char* _argv[])
 	{
 		bx::CommandLine cmdLine(_argc, _argv);
@@ -2365,7 +2367,7 @@ namespace bgfx
 			return bx::kExitFailure;
 		}
 
-		Options options;
+		ShaderCompileOptions options;
 		options.inputFilePath = filePath;
 		options.outputFilePath = outFilePath;
 		options.shaderType = bx::toLower(type[0]);
@@ -2565,9 +2567,15 @@ namespace bgfx
 		return bx::kExitFailure;
 	}
 
+#endif // SHADERC_STANDALONE
+
 } // namespace bgfx
+
+#ifdef SHADERC_STANDALONE
 
 int main(int _argc, const char* _argv[])
 {
 	return bgfx::compileShader(_argc, _argv);
 }
+
+#endif // SHADERC_STANDALONE

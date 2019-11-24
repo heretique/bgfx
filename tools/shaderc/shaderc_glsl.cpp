@@ -3,12 +3,12 @@
  * License: https://github.com/bkaradzic/bgfx#license-bsd-2-clause
  */
 
-#include "shaderc.h"
+#include "shaderc_private.h"
 #include "glsl_optimizer.h"
 
 namespace bgfx { namespace glsl
 {
-	static bool compile(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer)
+	static bool compile(const ShaderCompileOptions& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer)
 	{
 		char ch = _options.shaderType;
 		const glslopt_shader_type type = ch == 'f'
@@ -358,7 +358,7 @@ namespace bgfx { namespace glsl
 
 } // namespace glsl
 
-	bool compileGLSLShader(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer)
+	bool compileGLSLShader(const ShaderCompileOptions& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer)
 	{
 		return glsl::compile(_options, _version, _code, _writer);
 	}
