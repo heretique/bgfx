@@ -34,7 +34,11 @@
 #include <stdio.h>
 #include <string.h>
 
-#ifndef _WIN32
+#ifdef _WIN32
+#include <io.h>
+#define popen _popen
+#define pclose _pclose
+#else
 #include <unistd.h>
 #endif
 
@@ -72,6 +76,31 @@ struct Mesh
 	std::vector<const char*> target_names;
 };
 
+struct Track
+{
+	cgltf_node* node;
+	cgltf_animation_path_type path;
+
+	bool dummy;
+
+	size_t components; // 1 unless path is cgltf_animation_path_type_weights
+
+	cgltf_interpolation_type interpolation;
+
+	std::vector<float> time; // empty for resampled or constant animations
+	std::vector<Attr> data;
+};
+
+struct Animation
+{
+	const char* name;
+
+	float start;
+	int frames;
+
+	std::vector<Track> tracks;
+};
+
 struct Settings
 {
 	int pos_bits;
@@ -89,6 +118,9 @@ struct Settings
 
 	bool texture_embed;
 	bool texture_basis;
+	bool texture_ktx2;
+
+	int texture_quality;
 
 	bool compress;
 	bool fallback;
@@ -136,6 +168,15 @@ struct MaterialInfo
 struct ImageInfo
 {
 	bool normal_map;
+	bool srgb;
+};
+
+struct ExtensionInfo
+{
+	const char* name;
+
+	bool used;
+	bool required;
 };
 
 struct BufferView
@@ -161,12 +202,12 @@ struct BufferView
 	size_t bytes;
 };
 
-const char* getError(cgltf_result result)
+const char* getError(cgltf_result result, cgltf_data* data)
 {
 	switch (result)
 	{
 	case cgltf_result_file_not_found:
-		return "file not found";
+		return data ? "resource not found" : "file not found";
 
 	case cgltf_result_io_error:
 		return "I/O error";
@@ -179,6 +220,15 @@ const char* getError(cgltf_result result)
 
 	case cgltf_result_out_of_memory:
 		return "out of memory";
+
+	case cgltf_result_legacy_gltf:
+		return "legacy GLTF";
+
+	case cgltf_result_data_too_short:
+		return data ? "buffer too short" : "not a GLTF file";
+
+	case cgltf_result_unknown_format:
+		return data ? "unknown resource format" : "not a GLTF file";
 
 	default:
 		return "unknown error";
@@ -265,7 +315,7 @@ void transformMesh(Mesh& mesh, const cgltf_node* node)
 	}
 }
 
-void parseMeshesGltf(cgltf_data* data, std::vector<Mesh>& meshes)
+void parseMeshes(cgltf_data* data, std::vector<Mesh>& meshes)
 {
 	for (size_t ni = 0; ni < data->nodes_count; ++ni)
 	{
@@ -293,7 +343,7 @@ void parseMeshesGltf(cgltf_data* data, std::vector<Mesh>& meshes)
 				continue;
 			}
 
-			Mesh result;
+			Mesh result = {};
 
 			result.node = &node;
 
@@ -330,6 +380,12 @@ void parseMeshesGltf(cgltf_data* data, std::vector<Mesh>& meshes)
 
 				Stream s = {attr.type, attr.index};
 				readAccessor(s.data, attr.data);
+
+				if (attr.type == cgltf_attribute_type_color && attr.data->type == cgltf_type_vec3)
+				{
+					for (size_t i = 0; i < s.data.size(); ++i)
+						s.data[i].f[3] = 1.0f;
+				}
 
 				result.streams.push_back(s);
 			}
@@ -532,6 +588,49 @@ void parseMeshesObj(fastObjMesh* obj, cgltf_data* data, std::vector<Mesh>& meshe
 	}
 }
 
+void parseAnimations(cgltf_data* data, std::vector<Animation>& animations)
+{
+	for (size_t i = 0; i < data->animations_count; ++i)
+	{
+		const cgltf_animation& animation = data->animations[i];
+
+		Animation result = {};
+		result.name = animation.name;
+
+		for (size_t j = 0; j < animation.channels_count; ++j)
+		{
+			const cgltf_animation_channel& channel = animation.channels[j];
+
+			if (!channel.target_node)
+			{
+				fprintf(stderr, "Warning: ignoring channel %d of animation %d because it has no target node\n", int(j), int(i));
+				continue;
+			}
+
+			Track track = {};
+			track.node = channel.target_node;
+			track.path = channel.target_path;
+
+			track.components = (channel.target_path == cgltf_animation_path_type_weights) ? track.node->mesh->primitives[0].targets_count : 1;
+
+			track.interpolation = channel.sampler->interpolation;
+
+			readAccessor(track.time, channel.sampler->input);
+			readAccessor(track.data, channel.sampler->output);
+
+			result.tracks.push_back(track);
+		}
+
+		if (result.tracks.empty())
+		{
+			fprintf(stderr, "Warning: ignoring animation %d because it has no valid tracks\n", int(i));
+			continue;
+		}
+
+		animations.push_back(result);
+	}
+}
+
 bool areTextureViewsEqual(const cgltf_texture_view& lhs, const cgltf_texture_view& rhs)
 {
 	if (lhs.has_transform != rhs.has_transform)
@@ -642,6 +741,42 @@ bool areMaterialsEqual(const cgltf_material& lhs, const cgltf_material& rhs)
 		return false;
 
 	return true;
+}
+
+bool usesTextureSet(const cgltf_material& material, int set)
+{
+	if (material.has_pbr_metallic_roughness)
+	{
+		const cgltf_pbr_metallic_roughness& pbr = material.pbr_metallic_roughness;
+
+		if (pbr.base_color_texture.texture && pbr.base_color_texture.texcoord == set)
+			return true;
+
+		if (pbr.metallic_roughness_texture.texture && pbr.metallic_roughness_texture.texcoord == set)
+			return true;
+	}
+
+	if (material.has_pbr_specular_glossiness)
+	{
+		const cgltf_pbr_specular_glossiness& pbr = material.pbr_specular_glossiness;
+
+		if (pbr.diffuse_texture.texture && pbr.diffuse_texture.texcoord == set)
+			return true;
+
+		if (pbr.specular_glossiness_texture.texture && pbr.specular_glossiness_texture.texcoord == set)
+			return true;
+	}
+
+	if (material.normal_texture.texture && material.normal_texture.texcoord == set)
+		return true;
+
+	if (material.occlusion_texture.texture && material.occlusion_texture.texcoord == set)
+		return true;
+
+	if (material.emissive_texture.texture && material.emissive_texture.texcoord == set)
+		return true;
+
+	return false;
 }
 
 void mergeMeshMaterials(cgltf_data* data, std::vector<Mesh>& meshes)
@@ -760,28 +895,17 @@ void mergeMeshes(Mesh& target, const Mesh& mesh)
 
 void mergeMeshes(std::vector<Mesh>& meshes, const Settings& settings)
 {
-	size_t write = 0;
-
 	for (size_t i = 0; i < meshes.size(); ++i)
 	{
-		if (meshes[i].streams.empty())
+		Mesh& target = meshes[i];
+
+		if (target.streams.empty())
 			continue;
-
-		Mesh& target = meshes[write];
-
-		if (i != write)
-		{
-			Mesh& mesh = meshes[i];
-
-			// note: this copy is expensive; we could use move in C++11 or swap manually which is a bit painful...
-			target = mesh;
-
-			mesh.streams.clear();
-			mesh.indices.clear();
-		}
 
 		size_t target_vertices = target.streams[0].data.size();
 		size_t target_indices = target.indices.size();
+
+		size_t last_merged = i;
 
 		for (size_t j = i + 1; j < meshes.size(); ++j)
 		{
@@ -791,6 +915,7 @@ void mergeMeshes(std::vector<Mesh>& meshes, const Settings& settings)
 			{
 				target_vertices += mesh.streams[0].data.size();
 				target_indices += mesh.indices.size();
+				last_merged = j;
 			}
 		}
 
@@ -799,7 +924,7 @@ void mergeMeshes(std::vector<Mesh>& meshes, const Settings& settings)
 
 		target.indices.reserve(target_indices);
 
-		for (size_t j = i + 1; j < meshes.size(); ++j)
+		for (size_t j = i + 1; j <= last_merged; ++j)
 		{
 			Mesh& mesh = meshes[j];
 
@@ -814,11 +939,89 @@ void mergeMeshes(std::vector<Mesh>& meshes, const Settings& settings)
 
 		assert(target.streams[0].data.size() == target_vertices);
 		assert(target.indices.size() == target_indices);
+	}
+}
+
+void filterEmptyMeshes(std::vector<Mesh>& meshes)
+{
+	size_t write = 0;
+
+	for (size_t i = 0; i < meshes.size(); ++i)
+	{
+		Mesh& mesh = meshes[i];
+
+		if (mesh.streams.empty())
+			continue;
+
+		if (mesh.streams[0].data.empty())
+			continue;
+
+		if (mesh.type == cgltf_primitive_type_triangles && mesh.indices.empty())
+			continue;
+
+		// the following code is roughly equivalent to meshes[write] = std::move(mesh)
+		std::vector<Stream> streams;
+		streams.swap(mesh.streams);
+
+		std::vector<unsigned int> indices;
+		indices.swap(mesh.indices);
+
+		meshes[write] = mesh;
+		meshes[write].streams.swap(streams);
+		meshes[write].indices.swap(indices);
 
 		write++;
 	}
 
 	meshes.resize(write);
+}
+
+bool hasColorData(const std::vector<Attr>& data)
+{
+	const float threshold = 0.99f;
+
+	for (size_t i = 0; i < data.size(); ++i)
+	{
+		const Attr& a = data[i];
+
+		if (a.f[0] < threshold || a.f[1] < threshold || a.f[2] < threshold || a.f[3] < threshold)
+			return true;
+	}
+
+	return false;
+}
+
+void filterStreams(Mesh& mesh)
+{
+	size_t write = 0;
+
+	for (size_t i = 0; i < mesh.streams.size(); ++i)
+	{
+		Stream& stream = mesh.streams[i];
+
+		if (stream.type == cgltf_attribute_type_texcoord && (!mesh.material || !usesTextureSet(*mesh.material, stream.index)))
+			continue;
+
+		if (stream.type == cgltf_attribute_type_tangent && (!mesh.material || !mesh.material->normal_texture.texture))
+			continue;
+
+		if ((stream.type == cgltf_attribute_type_joints || stream.type == cgltf_attribute_type_weights) && !mesh.skin)
+			continue;
+
+		if (stream.type == cgltf_attribute_type_color && !hasColorData(stream.data))
+			continue;
+
+		// the following code is roughly equivalent to streams[write] = std::move(stream)
+		std::vector<Attr> data;
+		data.swap(stream.data);
+
+		mesh.streams[write] = stream;
+		mesh.streams[write].data.swap(data);
+
+		write++;
+	}
+
+	mesh.streams.resize(write);
 }
 
 void reindexMesh(Mesh& mesh)
@@ -853,7 +1056,7 @@ void reindexMesh(Mesh& mesh)
 	}
 }
 
-void filterMesh(Mesh& mesh)
+void filterTriangles(Mesh& mesh)
 {
 	unsigned int* indices = &mesh.indices[0];
 	size_t total_indices = mesh.indices.size();
@@ -1100,6 +1303,8 @@ void sortPointMesh(Mesh& mesh)
 
 void processMesh(Mesh& mesh, const Settings& settings)
 {
+	filterStreams(mesh);
+
 	switch (mesh.type)
 	{
 	case cgltf_primitive_type_points:
@@ -1111,7 +1316,7 @@ void processMesh(Mesh& mesh, const Settings& settings)
 	case cgltf_primitive_type_triangles:
 		filterBones(mesh);
 		reindexMesh(mesh);
-		filterMesh(mesh);
+		filterTriangles(mesh);
 		simplifyMesh(mesh, settings.simplify_threshold, settings.simplify_aggressive);
 		optimizeMesh(mesh);
 		break;
@@ -1525,11 +1730,7 @@ StreamFormat writeVertexStream(std::string& bin, const Stream& stream, const Qua
 		{
 			const Attr& a = stream.data[i];
 
-			float v[4] = {
-			    a.f[0],
-			    a.f[1],
-			    a.f[2],
-			    a.f[3]};
+			float v[4] = {a.f[0], a.f[1], a.f[2], a.f[3]};
 			bin.append(reinterpret_cast<const char*>(v), sizeof(v));
 		}
 
@@ -1656,17 +1857,35 @@ StreamFormat writeKeyframeStream(std::string& bin, cgltf_animation_path_type typ
 		StreamFormat format = {cgltf_type_scalar, cgltf_component_type_r_8u, true, 1};
 		return format;
 	}
+	else if (type == cgltf_animation_path_type_translation || type == cgltf_animation_path_type_scale)
+	{
+		int bits = 15;
+
+		for (size_t i = 0; i < data.size(); ++i)
+		{
+			const Attr& a = data[i];
+
+			float v[3] = {
+			    meshopt_quantizeFloat(a.f[0], bits),
+			    meshopt_quantizeFloat(a.f[1], bits),
+			    meshopt_quantizeFloat(a.f[2], bits)};
+			bin.append(reinterpret_cast<const char*>(v), sizeof(v));
+		}
+
+		StreamFormat format = {cgltf_type_vec3, cgltf_component_type_r_32f, false, 12};
+		return format;
+	}
 	else
 	{
 		for (size_t i = 0; i < data.size(); ++i)
 		{
 			const Attr& a = data[i];
 
-			float v[3] = {a.f[0], a.f[1], a.f[2]};
+			float v[4] = {a.f[0], a.f[1], a.f[2], a.f[3]};
 			bin.append(reinterpret_cast<const char*>(v), sizeof(v));
 		}
 
-		StreamFormat format = {cgltf_type_vec3, cgltf_component_type_r_32f, false, 12};
+		StreamFormat format = {cgltf_type_vec4, cgltf_component_type_r_32f, false, 16};
 		return format;
 	}
 }
@@ -2047,42 +2266,6 @@ void writeMaterialInfo(std::string& json, const cgltf_data* data, const cgltf_ma
 	}
 }
 
-bool usesTextureSet(const cgltf_material& material, int set)
-{
-	if (material.has_pbr_metallic_roughness)
-	{
-		const cgltf_pbr_metallic_roughness& pbr = material.pbr_metallic_roughness;
-
-		if (pbr.base_color_texture.texture && pbr.base_color_texture.texcoord == set)
-			return true;
-
-		if (pbr.metallic_roughness_texture.texture && pbr.metallic_roughness_texture.texcoord == set)
-			return true;
-	}
-
-	if (material.has_pbr_specular_glossiness)
-	{
-		const cgltf_pbr_specular_glossiness& pbr = material.pbr_specular_glossiness;
-
-		if (pbr.diffuse_texture.texture && pbr.diffuse_texture.texcoord == set)
-			return true;
-
-		if (pbr.specular_glossiness_texture.texture && pbr.specular_glossiness_texture.texcoord == set)
-			return true;
-	}
-
-	if (material.normal_texture.texture && material.normal_texture.texcoord == set)
-		return true;
-
-	if (material.occlusion_texture.texture && material.occlusion_texture.texcoord == set)
-		return true;
-
-	if (material.emissive_texture.texture && material.emissive_texture.texcoord == set)
-		return true;
-
-	return false;
-}
-
 size_t getBufferView(std::vector<BufferView>& views, BufferView::Kind kind, int variant, size_t stride, bool compressed)
 {
 	if (variant >= 0)
@@ -2185,69 +2368,46 @@ void writeAccessor(std::string& json, size_t view, size_t offset, cgltf_type typ
 
 float getDelta(const Attr& l, const Attr& r, cgltf_animation_path_type type)
 {
-	if (type == cgltf_animation_path_type_rotation)
+	switch (type)
 	{
-		float error = 1.f - fabsf(l.f[0] * r.f[0] + l.f[1] * r.f[1] + l.f[2] * r.f[2] + l.f[3] * r.f[3]);
+	case cgltf_animation_path_type_translation:
+		return std::max(std::max(fabsf(l.f[0] - r.f[0]), fabsf(l.f[1] - r.f[1])), fabsf(l.f[2] - r.f[2]));
 
-		return error;
-	}
-	else
-	{
-		float error = 0;
-		for (int k = 0; k < 4; ++k)
-			error += fabsf(r.f[k] - l.f[k]);
+	case cgltf_animation_path_type_rotation:
+		return acosf(std::min(1.f, fabsf(l.f[0] * r.f[0] + l.f[1] * r.f[1] + l.f[2] * r.f[2] + l.f[3] * r.f[3])));
 
-		return error;
+	case cgltf_animation_path_type_scale:
+		return std::max(std::max(fabsf(l.f[0] / r.f[0] - 1), fabsf(l.f[1] / r.f[1] - 1)), fabsf(l.f[2] / r.f[2] - 1));
+
+	case cgltf_animation_path_type_weights:
+		return fabsf(l.f[0] - r.f[0]);
+
+	default:
+		assert(!"Uknown animation path");
+		return 0;
 	}
 }
 
-bool isTrackConstant(const cgltf_animation_sampler& sampler, cgltf_animation_path_type type, cgltf_node* target_node, Attr* out_first = 0)
+float getDeltaTolerance(cgltf_animation_path_type type)
 {
-	const float tolerance = 1e-3f;
-
-	size_t value_stride = (sampler.interpolation == cgltf_interpolation_type_cubic_spline) ? 3 : 1;
-	size_t value_offset = (sampler.interpolation == cgltf_interpolation_type_cubic_spline) ? 1 : 0;
-
-	size_t components = (type == cgltf_animation_path_type_weights) ? target_node->mesh->primitives[0].targets_count : 1;
-
-	assert(sampler.input->count * value_stride * components == sampler.output->count);
-
-	std::vector<Attr> output;
-	readAccessor(output, sampler.output);
-
-	for (size_t j = 0; j < components; ++j)
+	switch (type)
 	{
-		Attr first = output[j * value_stride + value_offset];
+	case cgltf_animation_path_type_translation:
+		return 0.001f; // linear
 
-		for (size_t i = 1; i < sampler.input->count; ++i)
-		{
-			const Attr& attr = output[(i * components + j) * value_stride + value_offset];
+	case cgltf_animation_path_type_rotation:
+		return 0.001f; // radians
 
-			if (getDelta(first, attr, type) > tolerance)
-				return false;
-		}
+	case cgltf_animation_path_type_scale:
+		return 0.001f; // ratio
 
-		if (sampler.interpolation == cgltf_interpolation_type_cubic_spline)
-		{
-			for (size_t i = 0; i < sampler.input->count; ++i)
-			{
-				for (int k = 0; k < 2; ++k)
-				{
-					const Attr& t = output[(i * components + j) * 3 + k * 2];
+	case cgltf_animation_path_type_weights:
+		return 0.001f; // linear
 
-					float error = fabsf(t.f[0]) + fabsf(t.f[1]) + fabsf(t.f[2]) + fabsf(t.f[3]);
-
-					if (error > tolerance)
-						return false;
-				}
-			}
-		}
+	default:
+		assert(!"Uknown animation path");
+		return 0;
 	}
-
-	if (out_first)
-		*out_first = output[value_offset];
-
-	return true;
 }
 
 Attr interpolateLinear(const Attr& l, const Attr& r, float t, cgltf_animation_path_type type)
@@ -2332,22 +2492,15 @@ Attr interpolateHermite(const Attr& v0, const Attr& t0, const Attr& v1, const At
 	return lerp;
 }
 
-void resampleKeyframes(std::vector<Attr>& data, const cgltf_animation_sampler& sampler, cgltf_animation_path_type type, cgltf_node* target_node, int frames, float mint, int freq)
+void resampleKeyframes(std::vector<Attr>& data, const std::vector<float>& input, const std::vector<Attr>& output, cgltf_animation_path_type type, cgltf_interpolation_type interpolation, size_t components, int frames, float mint, int freq)
 {
-	size_t components = (type == cgltf_animation_path_type_weights) ? target_node->mesh->primitives[0].targets_count : 1;
-
-	std::vector<float> input;
-	readAccessor(input, sampler.input);
-	std::vector<Attr> output;
-	readAccessor(output, sampler.output);
-
 	size_t cursor = 0;
 
 	for (int i = 0; i < frames; ++i)
 	{
 		float time = mint + float(i) / freq;
 
-		while (cursor + 1 < sampler.input->count)
+		while (cursor + 1 < input.size())
 		{
 			float next_time = input[cursor + 1];
 
@@ -2357,7 +2510,7 @@ void resampleKeyframes(std::vector<Attr>& data, const cgltf_animation_sampler& s
 			cursor++;
 		}
 
-		if (cursor + 1 < sampler.input->count)
+		if (cursor + 1 < input.size())
 		{
 			float cursor_time = input[cursor + 0];
 			float next_time = input[cursor + 1];
@@ -2368,7 +2521,7 @@ void resampleKeyframes(std::vector<Attr>& data, const cgltf_animation_sampler& s
 
 			for (size_t j = 0; j < components; ++j)
 			{
-				switch (sampler.interpolation)
+				switch (interpolation)
 				{
 				case cgltf_interpolation_type_linear:
 				{
@@ -2402,7 +2555,7 @@ void resampleKeyframes(std::vector<Attr>& data, const cgltf_animation_sampler& s
 		}
 		else
 		{
-			size_t offset = (sampler.interpolation == cgltf_interpolation_type_cubic_spline) ? cursor * 3 + 1 : cursor;
+			size_t offset = (interpolation == cgltf_interpolation_type_cubic_spline) ? cursor * 3 + 1 : cursor;
 
 			for (size_t j = 0; j < components; ++j)
 			{
@@ -2413,59 +2566,123 @@ void resampleKeyframes(std::vector<Attr>& data, const cgltf_animation_sampler& s
 	}
 }
 
-void markAnimated(cgltf_data* data, std::vector<NodeInfo>& nodes)
+bool isTrackEqual(const std::vector<Attr>& data, cgltf_animation_path_type type, int frames, const Attr* value, size_t components)
 {
-	for (size_t i = 0; i < data->animations_count; ++i)
+	assert(data.size() == frames * components);
+
+	float tolerance = getDeltaTolerance(type);
+
+	for (int i = 0; i < frames; ++i)
 	{
-		const cgltf_animation& animation = data->animations[i];
-
-		for (size_t j = 0; j < animation.channels_count; ++j)
+		for (size_t j = 0; j < components; ++j)
 		{
-			const cgltf_animation_channel& channel = animation.channels[j];
-			const cgltf_animation_sampler& sampler = *channel.sampler;
+			float delta = getDelta(value[j], data[i * components + j], type);
 
-			if (!channel.target_node)
-				continue;
+			if (delta > tolerance)
+				return false;
+		}
+	}
 
-			NodeInfo& ni = nodes[channel.target_node - data->nodes];
+	return true;
+}
+
+void getBaseTransform(Attr* result, size_t components, cgltf_animation_path_type type, cgltf_node* node)
+{
+	switch (type)
+	{
+	case cgltf_animation_path_type_translation:
+		memcpy(result->f, node->translation, 3 * sizeof(float));
+		break;
+
+	case cgltf_animation_path_type_rotation:
+		memcpy(result->f, node->rotation, 4 * sizeof(float));
+		break;
+
+	case cgltf_animation_path_type_scale:
+		memcpy(result->f, node->scale, 3 * sizeof(float));
+		break;
+
+	case cgltf_animation_path_type_weights:
+		if (node->weights_count)
+		{
+			assert(node->weights_count == components);
+			memcpy(result->f, node->weights, components * sizeof(float));
+		}
+		else if (node->mesh && node->mesh->weights_count)
+		{
+			assert(node->mesh->weights_count == components);
+			memcpy(result->f, node->mesh->weights, components * sizeof(float));
+		}
+		break;
+
+	default:
+		assert(!"Unknown animation path");
+	}
+}
+
+void processAnimation(Animation& animation, const Settings& settings)
+{
+	float mint = 0, maxt = 0;
+
+	for (size_t i = 0; i < animation.tracks.size(); ++i)
+	{
+		const Track& track = animation.tracks[i];
+		assert(!track.time.empty());
+
+		mint = std::min(mint, track.time.front());
+		maxt = std::max(maxt, track.time.back());
+	}
+
+	// round the number of frames to nearest but favor the "up" direction
+	// this means that at 10 Hz resampling, we will try to preserve the last frame <10ms
+	// but if the last frame is <2ms we favor just removing this data
+	int frames = 1 + int((maxt - mint) * settings.anim_freq + 0.8f);
+
+	animation.start = mint;
+	animation.frames = frames;
+
+	std::vector<Attr> base;
+
+	for (size_t i = 0; i < animation.tracks.size(); ++i)
+	{
+		Track& track = animation.tracks[i];
+
+		std::vector<Attr> result;
+		resampleKeyframes(result, track.time, track.data, track.path, track.interpolation, track.components, frames, mint, settings.anim_freq);
+
+		track.time.clear();
+		track.data.swap(result);
+
+		if (isTrackEqual(track.data, track.path, frames, &track.data[0], track.components))
+		{
+			// track is constant (equal to first keyframe), we only need the first keyframe
+			track.data.resize(track.components);
+
+			// track.dummy is true iff track redundantly sets up the value to be equal to default node transform
+			base.resize(track.components);
+			getBaseTransform(&base[0], track.components, track.path, track.node);
+
+			track.dummy = isTrackEqual(track.data, track.path, 1, &base[0], track.components);
+		}
+	}
+}
+
+void markAnimated(cgltf_data* data, std::vector<NodeInfo>& nodes, const std::vector<Animation>& animations)
+{
+	for (size_t i = 0; i < animations.size(); ++i)
+	{
+		const Animation& animation = animations[i];
+
+		for (size_t j = 0; j < animation.tracks.size(); ++j)
+		{
+			const Track& track = animation.tracks[j];
 
 			// mark nodes that have animation tracks that change their base transform as animated
-			Attr first = {};
-			if (!isTrackConstant(sampler, channel.target_path, channel.target_node, &first))
+			if (!track.dummy)
 			{
-				ni.animated_paths |= (1 << channel.target_path);
-			}
-			else if (channel.target_path == cgltf_animation_path_type_weights)
-			{
-				// we currently preserve constant weight tracks because the usecase is very rare and
-				// isTrackConstant doesn't return the full set of weights to compare against
-				ni.animated_paths |= (1 << channel.target_path);
-			}
-			else
-			{
-				Attr base = {};
+				NodeInfo& ni = nodes[track.node - data->nodes];
 
-				switch (channel.target_path)
-				{
-				case cgltf_animation_path_type_translation:
-					memcpy(base.f, channel.target_node->translation, 3 * sizeof(float));
-					break;
-				case cgltf_animation_path_type_rotation:
-					memcpy(base.f, channel.target_node->rotation, 4 * sizeof(float));
-					break;
-				case cgltf_animation_path_type_scale:
-					memcpy(base.f, channel.target_node->scale, 3 * sizeof(float));
-					break;
-				default:
-					assert(!"Unknown target path");
-				}
-
-				const float tolerance = 1e-3f;
-
-				if (getDelta(base, first, channel.target_path) > tolerance)
-				{
-					ni.animated_paths |= (1 << channel.target_path);
-				}
+				ni.animated_paths |= (1 << track.path);
 			}
 		}
 	}
@@ -2479,7 +2696,7 @@ void markAnimated(cgltf_data* data, std::vector<NodeInfo>& nodes)
 	}
 }
 
-void markNeededNodes(cgltf_data* data, std::vector<NodeInfo>& nodes, const std::vector<Mesh>& meshes, const Settings& settings)
+void markNeededNodes(cgltf_data* data, std::vector<NodeInfo>& nodes, const std::vector<Mesh>& meshes, const std::vector<Animation>& animations, const Settings& settings)
 {
 	// mark all joints as kept
 	for (size_t i = 0; i < data->skins_count; ++i)
@@ -2496,17 +2713,17 @@ void markNeededNodes(cgltf_data* data, std::vector<NodeInfo>& nodes, const std::
 	}
 
 	// mark all animated nodes as kept
-	for (size_t i = 0; i < data->animations_count; ++i)
+	for (size_t i = 0; i < animations.size(); ++i)
 	{
-		const cgltf_animation& animation = data->animations[i];
+		const Animation& animation = animations[i];
 
-		for (size_t j = 0; j < animation.channels_count; ++j)
+		for (size_t j = 0; j < animation.tracks.size(); ++j)
 		{
-			const cgltf_animation_channel& channel = animation.channels[j];
+			const Track& track = animation.tracks[j];
 
-			if (channel.target_node)
+			if (settings.anim_const || !track.dummy)
 			{
-				NodeInfo& ni = nodes[channel.target_node - data->nodes];
+				NodeInfo& ni = nodes[track.node - data->nodes];
 
 				ni.keep = true;
 			}
@@ -2594,6 +2811,36 @@ void remapNodes(cgltf_data* data, std::vector<NodeInfo>& nodes, size_t& node_off
 	}
 }
 
+void analyzeImages(cgltf_data* data, std::vector<ImageInfo>& images)
+{
+	for (size_t i = 0; i < data->materials_count; ++i)
+	{
+		const cgltf_material& material = data->materials[i];
+
+		if (material.has_pbr_metallic_roughness)
+		{
+			const cgltf_pbr_metallic_roughness& pbr = material.pbr_metallic_roughness;
+
+			if (pbr.base_color_texture.texture && pbr.base_color_texture.texture->image)
+				images[pbr.base_color_texture.texture->image - data->images].srgb = true;
+		}
+
+		if (material.has_pbr_specular_glossiness)
+		{
+			const cgltf_pbr_specular_glossiness& pbr = material.pbr_specular_glossiness;
+
+			if (pbr.diffuse_texture.texture && pbr.diffuse_texture.texture->image)
+				images[pbr.diffuse_texture.texture->image - data->images].srgb = true;
+		}
+
+		if (material.emissive_texture.texture && material.emissive_texture.texture->image)
+			images[material.emissive_texture.texture->image - data->images].srgb = true;
+
+		if (material.normal_texture.texture && material.normal_texture.texture->image)
+			images[material.normal_texture.texture->image - data->images].normal_map = true;
+	}
+}
+
 bool parseDataUri(const char* uri, std::string& mime_type, std::string& result)
 {
 	if (strncmp(uri, "data:", 5) == 0)
@@ -2654,7 +2901,7 @@ std::string inferMimeType(const char* path)
 
 	std::string extl = ext + 1;
 	for (size_t i = 0; i < extl.length(); ++i)
-		extl[i] = tolower(extl[i]);
+		extl[i] = char(tolower(extl[i]));
 
 	if (extl == "jpg")
 		return "image/jpeg";
@@ -2724,21 +2971,91 @@ bool writeFile(const char* path, const std::string& data)
 	return result == data.size();
 }
 
-bool encodeBasisFile(const char* input, const char* output, bool normal_map)
+struct TempFile
 {
-	std::string cmd = "basisu";
+	std::string path;
+	int fd;
+
+	TempFile(const char* suffix)
+	    : fd(-1)
+	{
+#ifdef _WIN32
+		const char* temp_dir = getenv("TEMP");
+		path = temp_dir ? temp_dir : ".";
+		path += "\\gltfpack-XXXXXX";
+		(void)_mktemp(&path[0]);
+		path += suffix;
+#else
+		path = "/tmp/gltfpack-XXXXXX";
+		path += suffix;
+		fd = mkstemps(&path[0], strlen(suffix));
+#endif
+	}
+
+	~TempFile()
+	{
+		unlink(path.c_str());
+#ifndef _WIN32
+		close(fd);
+#endif
+	}
+};
+
+bool checkBasis()
+{
+	const char* basisu_path = getenv("BASISU_PATH");
+	std::string cmd = basisu_path ? basisu_path : "basisu";
+
+#ifdef _WIN32
+	cmd += " 2>nul";
+#else
+	cmd += " 2>/dev/null";
+#endif
+
+	FILE* pipe = popen(cmd.c_str(), "r");
+	if (!pipe)
+		return false;
+
+	char buf[15];
+	size_t read = fread(buf, 1, sizeof(buf), pipe);
+	pclose(pipe);
+
+	return read == sizeof(buf) && memcmp(buf, "Basis Universal", sizeof(buf)) == 0;
+}
+
+bool encodeBasis(const std::string& data, std::string& result, bool normal_map, bool srgb, int quality)
+{
+	TempFile temp_input(".raw");
+	TempFile temp_output(".basis");
+
+	if (!writeFile(temp_input.path.c_str(), data))
+		return false;
+
+	const char* basisu_path = getenv("BASISU_PATH");
+	std::string cmd = basisu_path ? basisu_path : "basisu";
+
+	char ql[16];
+	sprintf(ql, "%d", (quality * 255 + 50) / 100);
+
+	cmd += " -q ";
+	cmd += ql;
 
 	cmd += " -mipmap";
+
 	if (normal_map)
 	{
 		cmd += " -normal_map";
 		// for optimal quality we should specify seperate_rg_to_color_alpha but this requires renderer awareness
 	}
+	else if (!srgb)
+	{
+		cmd += " -linear";
+	}
 
 	cmd += " -file ";
-	cmd += input;
+	cmd += temp_input.path;
 	cmd += " -output_file ";
-	cmd += output;
+	cmd += temp_output.path;
 
 #ifdef _WIN32
 	cmd += " >nul";
@@ -2746,24 +3063,13 @@ bool encodeBasisFile(const char* input, const char* output, bool normal_map)
 	cmd += " >/dev/null";
 #endif
 
-	return system(cmd.c_str()) == 0;
+	int rc = system(cmd.c_str());
+
+	return rc == 0 && readFile(temp_output.path.c_str(), result);
 }
 
-bool encodeBasisData(const std::string& data, std::string& result, bool normal_map, const char* output_path)
-{
-	std::string temp_name = getFileName(output_path) + ".temp";
-	std::string temp_input = getFullPath(temp_name.c_str(), output_path) + ".png";
-	std::string temp_output = getFullPath(temp_name.c_str(), output_path) + ".basis";
-
-	bool ok =
-	    writeFile(temp_input.c_str(), data) &&
-	    encodeBasisFile(temp_input.c_str(), temp_output.c_str(), normal_map) &&
-	    readFile(temp_output.c_str(), result);
-
-	unlink(temp_input.c_str());
-	unlink(temp_output.c_str());
-	return ok;
-}
+// basistoktx.cpp
+extern std::string basisToKtx(const std::string& basis, bool srgb);
 
 void writeImage(std::string& json, std::vector<BufferView>& views, const cgltf_image& image, const ImageInfo& info, size_t index, const char* input_path, const char* output_path, const Settings& settings)
 {
@@ -2799,9 +3105,12 @@ void writeImage(std::string& json, std::vector<BufferView>& views, const cgltf_i
 		{
 			std::string encoded;
 
-			if (encodeBasisData(img_data, encoded, info.normal_map, output_path))
+			if (encodeBasis(img_data, encoded, info.normal_map, info.srgb, settings.texture_quality))
 			{
-				writeEmbeddedImage(json, views, encoded.c_str(), encoded.size(), "image/basis");
+				if (settings.texture_ktx2)
+					encoded = basisToKtx(encoded, info.srgb);
+
+				writeEmbeddedImage(json, views, encoded.c_str(), encoded.size(), settings.texture_ktx2 ? "image/ktx2" : "image/basis");
 			}
 			else
 			{
@@ -2818,18 +3127,37 @@ void writeImage(std::string& json, std::vector<BufferView>& views, const cgltf_i
 		if (settings.texture_basis)
 		{
 			std::string full_path = getFullPath(image.uri, input_path);
-			std::string basis_path = getFileName(image.uri) + ".basis";
+			std::string basis_path = getFileName(image.uri) + (settings.texture_ktx2 ? ".ktx2" : ".basis");
 			std::string basis_full_path = getFullPath(basis_path.c_str(), output_path);
 
-			if (encodeBasisFile(full_path.c_str(), basis_full_path.c_str(), info.normal_map))
+			if (readFile(full_path.c_str(), img_data))
 			{
-				append(json, "\"uri\":\"");
-				append(json, basis_path);
-				append(json, "\"");
+				std::string encoded;
+
+				if (encodeBasis(img_data, encoded, info.normal_map, info.srgb, settings.texture_quality))
+				{
+					if (settings.texture_ktx2)
+						encoded = basisToKtx(encoded, info.srgb);
+
+					if (writeFile(basis_full_path.c_str(), encoded))
+					{
+						append(json, "\"uri\":\"");
+						append(json, basis_path);
+						append(json, "\"");
+					}
+					else
+					{
+						fprintf(stderr, "Warning: unable to save Basis image %s, skipping\n", image.uri);
+					}
+				}
+				else
+				{
+					fprintf(stderr, "Warning: unable to encode image %s with Basis, skipping\n", image.uri);
+				}
 			}
 			else
 			{
-				fprintf(stderr, "Warning: unable to encode image %s with Basis, skipping\n", image.uri);
+				fprintf(stderr, "Warning: unable to read image %s, skipping\n", image.uri);
 			}
 		}
 		else
@@ -2845,6 +3173,24 @@ void writeImage(std::string& json, std::vector<BufferView>& views, const cgltf_i
 	}
 }
 
+void writeTexture(std::string& json, const cgltf_texture& texture, cgltf_data* data, const Settings& settings)
+{
+	if (texture.image)
+	{
+		if (settings.texture_ktx2)
+		{
+			append(json, "\"extensions\":{\"KHR_texture_basisu\":{\"source\":");
+			append(json, size_t(texture.image - data->images));
+			append(json, "}}");
+		}
+		else
+		{
+			append(json, "\"source\":");
+			append(json, size_t(texture.image - data->images));
+		}
+	}
+}
+
 void writeMeshAttributes(std::string& json, std::vector<BufferView>& views, std::string& json_accessors, size_t& accr_offset, const Mesh& mesh, int target, const QuantizationParams& qp, const Settings& settings)
 {
 	std::string scratch;
@@ -2854,15 +3200,6 @@ void writeMeshAttributes(std::string& json, std::vector<BufferView>& views, std:
 		const Stream& stream = mesh.streams[j];
 
 		if (stream.target != target)
-			continue;
-
-		if (stream.type == cgltf_attribute_type_texcoord && (!mesh.material || !usesTextureSet(*mesh.material, stream.index)))
-			continue;
-
-		if (stream.type == cgltf_attribute_type_tangent && (!mesh.material || !mesh.material->normal_texture.texture))
-			continue;
-
-		if ((stream.type == cgltf_attribute_type_joints || stream.type == cgltf_attribute_type_weights) && !mesh.skin)
 			continue;
 
 		scratch.clear();
@@ -3120,62 +3457,46 @@ void writeNode(std::string& json, const cgltf_node& node, const std::vector<Node
 	append(json, "}");
 }
 
-void writeAnimation(std::string& json, std::vector<BufferView>& views, std::string& json_accessors, size_t& accr_offset, const cgltf_animation& animation, cgltf_data* data, const std::vector<NodeInfo>& nodes, const Settings& settings)
+void writeAnimation(std::string& json, std::vector<BufferView>& views, std::string& json_accessors, size_t& accr_offset, const Animation& animation, size_t i, cgltf_data* data, const std::vector<NodeInfo>& nodes, const Settings& settings)
 {
-	std::vector<const cgltf_animation_channel*> tracks;
+	std::vector<const Track*> tracks;
 
-	for (size_t j = 0; j < animation.channels_count; ++j)
+	for (size_t j = 0; j < animation.tracks.size(); ++j)
 	{
-		const cgltf_animation_channel& channel = animation.channels[j];
+		const Track& track = animation.tracks[j];
 
-		if (!channel.target_node)
-		{
-			fprintf(stderr, "Warning: ignoring channel %d of animation %d because it has no target node\n", int(j), int(&animation - data->animations));
-			continue;
-		}
-
-		const NodeInfo& ni = nodes[channel.target_node - data->nodes];
+		const NodeInfo& ni = nodes[track.node - data->nodes];
 
 		if (!ni.keep)
 			continue;
 
-		if (!settings.anim_const && (ni.animated_paths & (1 << channel.target_path)) == 0)
+		if (!settings.anim_const && (ni.animated_paths & (1 << track.path)) == 0)
 			continue;
 
-		tracks.push_back(&channel);
+		tracks.push_back(&track);
 	}
 
 	if (tracks.empty())
 	{
-		fprintf(stderr, "Warning: ignoring animation %d because it has no valid tracks\n", int(&animation - data->animations));
+		fprintf(stderr, "Warning: ignoring animation %d because it has no valid tracks\n", int(i));
 		return;
 	}
 
-	float mint = 0, maxt = 0;
 	bool needs_time = false;
 	bool needs_pose = false;
 
 	for (size_t j = 0; j < tracks.size(); ++j)
 	{
-		const cgltf_animation_channel& channel = *tracks[j];
-		const cgltf_animation_sampler& sampler = *channel.sampler;
+		const Track& track = *tracks[j];
 
-		mint = std::min(mint, sampler.input->min[0]);
-		maxt = std::max(maxt, sampler.input->max[0]);
-
-		bool tc = isTrackConstant(sampler, channel.target_path, channel.target_node);
+		bool tc = track.data.size() == track.components;
 
 		needs_time = needs_time || !tc;
 		needs_pose = needs_pose || tc;
 	}
 
-	// round the number of frames to nearest but favor the "up" direction
-	// this means that at 10 Hz resampling, we will try to preserve the last frame <10ms
-	// but if the last frame is <2ms we favor just removing this data
-	int frames = 1 + int((maxt - mint) * settings.anim_freq + 0.8f);
-
-	size_t time_accr = needs_time ? writeAnimationTime(views, json_accessors, accr_offset, mint, frames, settings) : 0;
-	size_t pose_accr = needs_pose ? writeAnimationTime(views, json_accessors, accr_offset, mint, 1, settings) : 0;
+	size_t time_accr = needs_time ? writeAnimationTime(views, json_accessors, accr_offset, animation.start, animation.frames, settings) : 0;
+	size_t pose_accr = needs_pose ? writeAnimationTime(views, json_accessors, accr_offset, animation.start, 1, settings) : 0;
 
 	std::string json_samplers;
 	std::string json_channels;
@@ -3184,23 +3505,19 @@ void writeAnimation(std::string& json, std::vector<BufferView>& views, std::stri
 
 	for (size_t j = 0; j < tracks.size(); ++j)
 	{
-		const cgltf_animation_channel& channel = *tracks[j];
-		const cgltf_animation_sampler& sampler = *channel.sampler;
+		const Track& track = *tracks[j];
 
-		bool tc = isTrackConstant(sampler, channel.target_path, channel.target_node);
-
-		std::vector<Attr> track;
-		resampleKeyframes(track, sampler, channel.target_path, channel.target_node, tc ? 1 : frames, mint, settings.anim_freq);
+		bool tc = track.data.size() == track.components;
 
 		std::string scratch;
-		StreamFormat format = writeKeyframeStream(scratch, channel.target_path, track);
+		StreamFormat format = writeKeyframeStream(scratch, track.path, track.data);
 
-		size_t view = getBufferView(views, BufferView::Kind_Keyframe, channel.target_path, format.stride, settings.compress && channel.target_path != cgltf_animation_path_type_weights);
+		size_t view = getBufferView(views, BufferView::Kind_Keyframe, track.path, format.stride, settings.compress && track.path != cgltf_animation_path_type_weights);
 		size_t offset = views[view].data.size();
 		views[view].data += scratch;
 
 		comma(json_accessors);
-		writeAccessor(json_accessors, view, offset, format.type, format.component_type, format.normalized, track.size());
+		writeAccessor(json_accessors, view, offset, format.type, format.component_type, format.normalized, track.data.size());
 
 		size_t data_accr = accr_offset++;
 
@@ -3211,10 +3528,10 @@ void writeAnimation(std::string& json, std::vector<BufferView>& views, std::stri
 		append(json_samplers, data_accr);
 		append(json_samplers, "}");
 
-		const NodeInfo& tni = nodes[channel.target_node - data->nodes];
+		const NodeInfo& tni = nodes[track.node - data->nodes];
 		size_t target_node = size_t(tni.remap);
 
-		if (channel.target_path == cgltf_animation_path_type_weights)
+		if (track.path == cgltf_animation_path_type_weights)
 		{
 			assert(tni.meshes.size() == 1);
 			target_node = tni.meshes[0];
@@ -3226,7 +3543,7 @@ void writeAnimation(std::string& json, std::vector<BufferView>& views, std::stri
 		append(json_channels, ",\"target\":{\"node\":");
 		append(json_channels, target_node);
 		append(json_channels, ",\"path\":\"");
-		append(json_channels, animationPath(channel.target_path));
+		append(json_channels, animationPath(track.path));
 		append(json_channels, "\"}}");
 
 		track_offset++;
@@ -3257,18 +3574,18 @@ void writeCamera(std::string& json, const cgltf_camera& camera)
 	case cgltf_camera_type_perspective:
 		append(json, "\"type\":\"perspective\",\"perspective\":{");
 		append(json, "\"yfov\":");
-		append(json, camera.perspective.yfov);
+		append(json, camera.data.perspective.yfov);
 		append(json, ",\"znear\":");
-		append(json, camera.perspective.znear);
-		if (camera.perspective.aspect_ratio != 0.f)
+		append(json, camera.data.perspective.znear);
+		if (camera.data.perspective.aspect_ratio != 0.f)
 		{
 			append(json, ",\"aspectRatio\":");
-			append(json, camera.perspective.aspect_ratio);
+			append(json, camera.data.perspective.aspect_ratio);
 		}
-		if (camera.perspective.zfar != 0.f)
+		if (camera.data.perspective.zfar != 0.f)
 		{
 			append(json, ",\"zfar\":");
-			append(json, camera.perspective.zfar);
+			append(json, camera.data.perspective.zfar);
 		}
 		append(json, "}");
 		break;
@@ -3276,13 +3593,13 @@ void writeCamera(std::string& json, const cgltf_camera& camera)
 	case cgltf_camera_type_orthographic:
 		append(json, "\"type\":\"orthographic\",\"orthographic\":{");
 		append(json, "\"xmag\":");
-		append(json, camera.orthographic.xmag);
+		append(json, camera.data.orthographic.xmag);
 		append(json, ",\"ymag\":");
-		append(json, camera.orthographic.ymag);
+		append(json, camera.data.orthographic.ymag);
 		append(json, ",\"znear\":");
-		append(json, camera.orthographic.znear);
+		append(json, camera.data.orthographic.znear);
 		append(json, ",\"zfar\":");
-		append(json, camera.orthographic.zfar);
+		append(json, camera.data.orthographic.zfar);
 		append(json, "}");
 		break;
 
@@ -3335,6 +3652,46 @@ void writeLight(std::string& json, const cgltf_light& light)
 		append(json, "}");
 	}
 	append(json, "}");
+}
+
+void writeArray(std::string& json, const char* name, const std::string& contents)
+{
+	if (contents.empty())
+		return;
+
+	comma(json);
+	append(json, "\"");
+	append(json, name);
+	append(json, "\":[");
+	append(json, contents);
+	append(json, "]");
+}
+
+void writeExtensions(std::string& json, const ExtensionInfo* extensions, size_t count)
+{
+	comma(json);
+	append(json, "\"extensionsUsed\":[");
+	for (size_t i = 0; i < count; ++i)
+		if (extensions[i].used)
+		{
+			comma(json);
+			append(json, "\"");
+			append(json, extensions[i].name);
+			append(json, "\"");
+		}
+	append(json, "]");
+
+	comma(json);
+	append(json, "\"extensionsRequired\":[");
+	for (size_t i = 0; i < count; ++i)
+		if (extensions[i].used && extensions[i].required)
+		{
+			comma(json);
+			append(json, "\"");
+			append(json, extensions[i].name);
+			append(json, "\"");
+		}
+	append(json, "]");
 }
 
 void finalizeBufferViews(std::string& json, std::vector<BufferView>& views, std::string& bin, std::string& fallback)
@@ -3400,6 +3757,23 @@ void printMeshStats(const std::vector<Mesh>& meshes, const char* name)
 	printf("%s: %d triangles, %d vertices\n", name, int(triangles), int(vertices));
 }
 
+void printSceneStats(const std::vector<BufferView>& views, const std::vector<Mesh>& meshes, size_t node_offset, size_t mesh_offset, size_t material_offset, size_t json_size, size_t bin_size)
+{
+	size_t bytes[BufferView::Kind_Count] = {};
+
+	for (size_t i = 0; i < views.size(); ++i)
+	{
+		const BufferView& view = views[i];
+		bytes[view.kind] += view.bytes;
+	}
+
+	printf("output: %d nodes, %d meshes (%d primitives), %d materials\n", int(node_offset), int(mesh_offset), int(meshes.size()), int(material_offset));
+	printf("output: JSON %d bytes, buffers %d bytes\n", int(json_size), int(bin_size));
+	printf("output: buffers: vertex %d bytes, index %d bytes, skin %d bytes, time %d bytes, keyframe %d bytes, image %d bytes\n",
+	       int(bytes[BufferView::Kind_Vertex]), int(bytes[BufferView::Kind_Index]), int(bytes[BufferView::Kind_Skin]),
+	       int(bytes[BufferView::Kind_Time]), int(bytes[BufferView::Kind_Keyframe]), int(bytes[BufferView::Kind_Image]));
+}
+
 void printAttributeStats(const std::vector<BufferView>& views, BufferView::Kind kind, const char* name)
 {
 	for (size_t i = 0; i < views.size(); ++i)
@@ -3440,17 +3814,23 @@ void printAttributeStats(const std::vector<BufferView>& views, BufferView::Kind 
 	}
 }
 
-void process(cgltf_data* data, const char* input_path, const char* output_path, std::vector<Mesh>& meshes, const Settings& settings, std::string& json, std::string& bin, std::string& fallback)
+void process(cgltf_data* data, const char* input_path, const char* output_path, std::vector<Mesh>& meshes, std::vector<Animation>& animations, const Settings& settings, std::string& json, std::string& bin, std::string& fallback)
 {
 	if (settings.verbose)
 	{
 		printf("input: %d nodes, %d meshes (%d primitives), %d materials, %d skins, %d animations\n",
-		       int(data->nodes_count), int(data->meshes_count), int(meshes.size()), int(data->materials_count), int(data->skins_count), int(data->animations_count));
+		       int(data->nodes_count), int(data->meshes_count), int(meshes.size()), int(data->materials_count), int(data->skins_count), int(animations.size()));
+		printMeshStats(meshes, "input");
+	}
+
+	for (size_t i = 0; i < animations.size(); ++i)
+	{
+		processAnimation(animations[i], settings);
 	}
 
 	std::vector<NodeInfo> nodes(data->nodes_count);
 
-	markAnimated(data, nodes);
+	markAnimated(data, nodes, animations);
 
 	for (size_t i = 0; i < meshes.size(); ++i)
 	{
@@ -3477,37 +3857,24 @@ void process(cgltf_data* data, const char* input_path, const char* output_path, 
 
 	mergeMeshMaterials(data, meshes);
 	mergeMeshes(meshes, settings);
+	filterEmptyMeshes(meshes);
 
-	markNeededNodes(data, nodes, meshes, settings);
+	markNeededNodes(data, nodes, meshes, animations, settings);
 
 	std::vector<MaterialInfo> materials(data->materials_count);
 
 	markNeededMaterials(data, materials, meshes);
-
-	if (settings.verbose)
-	{
-		printMeshStats(meshes, "input");
-	}
 
 	for (size_t i = 0; i < meshes.size(); ++i)
 	{
 		processMesh(meshes[i], settings);
 	}
 
-	if (settings.verbose)
-	{
-		printMeshStats(meshes, "output");
-	}
+	filterEmptyMeshes(meshes); // some meshes may become empty after processing
 
 	std::vector<ImageInfo> images(data->images_count);
 
-	for (size_t i = 0; i < data->materials_count; ++i)
-	{
-		const cgltf_material& material = data->materials[i];
-
-		if (material.normal_texture.texture && material.normal_texture.texture->image)
-			images[material.normal_texture.texture->image - data->images].normal_map = true;
-	}
+	analyzeImages(data, images);
 
 	QuantizationParams qp = prepareQuantization(meshes, settings);
 
@@ -3535,9 +3902,11 @@ void process(cgltf_data* data, const char* input_path, const char* output_path, 
 
 	for (size_t i = 0; i < data->images_count; ++i)
 	{
+		const cgltf_image& image = data->images[i];
+
 		if (settings.verbose && settings.texture_basis)
 		{
-			const char* uri = data->images[i].uri;
+			const char* uri = image.uri;
 			bool embedded = !uri || strncmp(uri, "data:", 5) == 0;
 
 			printf("image %d (%s) is being encoded with Basis\n", int(i), embedded ? "embedded" : uri);
@@ -3545,7 +3914,7 @@ void process(cgltf_data* data, const char* input_path, const char* output_path, 
 
 		comma(json_images);
 		append(json_images, "{");
-		writeImage(json_images, views, data->images[i], images[i], i, input_path, output_path, settings);
+		writeImage(json_images, views, image, images[i], i, input_path, output_path, settings);
 		append(json_images, "}");
 	}
 
@@ -3555,11 +3924,7 @@ void process(cgltf_data* data, const char* input_path, const char* output_path, 
 
 		comma(json_textures);
 		append(json_textures, "{");
-		if (texture.image)
-		{
-			append(json_textures, "\"source\":");
-			append(json_textures, size_t(texture.image - data->images));
-		}
+		writeTexture(json_textures, texture, data, settings);
 		append(json_textures, "}");
 	}
 
@@ -3739,11 +4104,11 @@ void process(cgltf_data* data, const char* input_path, const char* output_path, 
 		append(json_skins, "}");
 	}
 
-	for (size_t i = 0; i < data->animations_count; ++i)
+	for (size_t i = 0; i < animations.size(); ++i)
 	{
-		const cgltf_animation& animation = data->animations[i];
+		const Animation& animation = animations[i];
 
-		writeAnimation(json_animations, views, json_accessors, accr_offset, animation, data, nodes, settings);
+		writeAnimation(json_animations, views, json_accessors, accr_offset, animation, i, data, nodes, settings);
 	}
 
 	for (size_t i = 0; i < data->cameras_count; ++i)
@@ -3774,110 +4139,42 @@ void process(cgltf_data* data, const char* input_path, const char* output_path, 
 	}
 	append(json, "}");
 
-	append(json, ",\"extensionsUsed\":[");
-	append(json, "\"KHR_mesh_quantization\"");
-	if (settings.compress)
-	{
-		comma(json);
-		append(json, "\"MESHOPT_compression\"");
-	}
-	if (!json_textures.empty())
-	{
-		comma(json);
-		append(json, "\"KHR_texture_transform\"");
-	}
-	if (ext_pbr_specular_glossiness)
-	{
-		comma(json);
-		append(json, "\"KHR_materials_pbrSpecularGlossiness\"");
-	}
-	if (ext_unlit)
-	{
-		comma(json);
-		append(json, "\"KHR_materials_unlit\"");
-	}
-	if (data->lights_count)
-	{
-		comma(json);
-		append(json, "\"KHR_lights_punctual\"");
-	}
-	append(json, "]");
+	const ExtensionInfo extensions[] = {
+	    {"KHR_mesh_quantization", true, true},
+	    {"MESHOPT_compression", settings.compress, !settings.fallback},
+	    {"KHR_texture_transform", !json_textures.empty(), false},
+	    {"KHR_materials_pbrSpecularGlossiness", ext_pbr_specular_glossiness, false},
+	    {"KHR_materials_unlit", ext_unlit, false},
+	    {"KHR_lights_punctual", data->lights_count > 0, false},
+	    {"KHR_image_ktx2", !json_textures.empty() && settings.texture_ktx2, true},
+	    {"KHR_texture_basisu", !json_textures.empty() && settings.texture_ktx2, true},
+	};
 
-	append(json, ",\"extensionsRequired\":[");
-	append(json, "\"KHR_mesh_quantization\"");
-	if (settings.compress && !settings.fallback)
-	{
-		comma(json);
-		append(json, "\"MESHOPT_compression\"");
-	}
-	append(json, "]");
+	writeExtensions(json, extensions, sizeof(extensions) / sizeof(extensions[0]));
 
-	if (!views.empty())
-	{
-		std::string json_views;
-		finalizeBufferViews(json_views, views, bin, fallback);
+	std::string json_views;
+	finalizeBufferViews(json_views, views, bin, fallback);
 
-		append(json, ",\"bufferViews\":[");
-		append(json, json_views);
-		append(json, "]");
-	}
-	if (!json_accessors.empty())
-	{
-		append(json, ",\"accessors\":[");
-		append(json, json_accessors);
-		append(json, "]");
-	}
-	if (!json_images.empty())
-	{
-		append(json, ",\"images\":[");
-		append(json, json_images);
-		append(json, "]");
-	}
-	if (!json_textures.empty())
-	{
-		append(json, ",\"textures\":[");
-		append(json, json_textures);
-		append(json, "]");
-	}
-	if (!json_materials.empty())
-	{
-		append(json, ",\"materials\":[");
-		append(json, json_materials);
-		append(json, "]");
-	}
-	if (!json_meshes.empty())
-	{
-		append(json, ",\"meshes\":[");
-		append(json, json_meshes);
-		append(json, "]");
-	}
-	if (!json_skins.empty())
-	{
-		append(json, ",\"skins\":[");
-		append(json, json_skins);
-		append(json, "]");
-	}
-	if (!json_animations.empty())
-	{
-		append(json, ",\"animations\":[");
-		append(json, json_animations);
-		append(json, "]");
-	}
+	writeArray(json, "bufferViews", json_views);
+	writeArray(json, "accessors", json_accessors);
+	writeArray(json, "images", json_images);
+	writeArray(json, "textures", json_textures);
+	writeArray(json, "materials", json_materials);
+	writeArray(json, "meshes", json_meshes);
+	writeArray(json, "skins", json_skins);
+	writeArray(json, "animations", json_animations);
+	writeArray(json, "nodes", json_nodes);
+
 	if (!json_roots.empty())
 	{
-		append(json, ",\"nodes\":[");
-		append(json, json_nodes);
-		append(json, "],\"scenes\":[");
+		append(json, ",\"scenes\":[");
 		append(json, "{\"nodes\":[");
 		append(json, json_roots);
 		append(json, "]}]");
 	}
-	if (!json_cameras.empty())
-	{
-		append(json, ",\"cameras\":[");
-		append(json, json_cameras);
-		append(json, "]");
-	}
+
+	writeArray(json, "cameras", json_cameras);
+
 	if (!json_lights.empty())
 	{
 		append(json, ",\"extensions\":{\"KHR_lights_punctual\":{\"lights\":[");
@@ -3891,19 +4188,8 @@ void process(cgltf_data* data, const char* input_path, const char* output_path, 
 
 	if (settings.verbose)
 	{
-		size_t bytes[BufferView::Kind_Count] = {};
-
-		for (size_t i = 0; i < views.size(); ++i)
-		{
-			BufferView& view = views[i];
-			bytes[view.kind] += view.bytes;
-		}
-
-		printf("output: %d nodes, %d meshes (%d primitives), %d materials\n", int(node_offset), int(mesh_offset), int(meshes.size()), int(material_offset));
-		printf("output: JSON %d bytes, buffers %d bytes\n", int(json.size()), int(bin.size()));
-		printf("output: buffers: vertex %d bytes, index %d bytes, skin %d bytes, time %d bytes, keyframe %d bytes, image %d bytes\n",
-		       int(bytes[BufferView::Kind_Vertex]), int(bytes[BufferView::Kind_Index]), int(bytes[BufferView::Kind_Skin]),
-		       int(bytes[BufferView::Kind_Time]), int(bytes[BufferView::Kind_Keyframe]), int(bytes[BufferView::Kind_Image]));
+		printMeshStats(meshes, "output");
+		printSceneStats(views, meshes, node_offset, mesh_offset, material_offset, json.size(), bin.size());
 	}
 
 	if (settings.verbose > 1)
@@ -3978,10 +4264,34 @@ std::string getBufferSpec(const char* bin_path, size_t bin_size, const char* fal
 	return json;
 }
 
+bool needsDummyBuffers(cgltf_data* data)
+{
+	for (size_t i = 0; i < data->accessors_count; ++i)
+	{
+		cgltf_accessor* accessor = &data->accessors[i];
+
+		if (accessor->buffer_view && accessor->buffer_view->buffer->data == NULL)
+			return true;
+
+		if (accessor->is_sparse)
+		{
+			cgltf_accessor_sparse* sparse = &accessor->sparse;
+
+			if (sparse->indices_buffer_view->buffer->data == NULL)
+				return true;
+			if (sparse->values_buffer_view->buffer->data == NULL)
+				return true;
+		}
+	}
+
+	return false;
+}
+
 int gltfpack(const char* input, const char* output, const Settings& settings)
 {
 	cgltf_data* data = 0;
 	std::vector<Mesh> meshes;
+	std::vector<Animation> animations;
 
 	const char* iext = strrchr(input, '.');
 
@@ -3989,17 +4299,19 @@ int gltfpack(const char* input, const char* output, const Settings& settings)
 	{
 		cgltf_options options = {};
 		cgltf_result result = cgltf_parse_file(&options, input, &data);
-		result = (result == cgltf_result_success) ? cgltf_validate(data) : result;
 		result = (result == cgltf_result_success) ? cgltf_load_buffers(&options, data, input) : result;
+		result = (result == cgltf_result_success) ? cgltf_validate(data) : result;
 
 		const char* error = NULL;
 
 		if (result != cgltf_result_success)
-			error = getError(result);
+			error = getError(result, data);
 		else if (requiresExtension(data, "KHR_draco_mesh_compression"))
 			error = "file requires Draco mesh compression support";
 		else if (requiresExtension(data, "MESHOPT_compression"))
 			error = "file has already been compressed using gltfpack";
+		else if (needsDummyBuffers(data))
+			error = "buffer has no data";
 
 		if (error)
 		{
@@ -4008,7 +4320,8 @@ int gltfpack(const char* input, const char* output, const Settings& settings)
 			return 2;
 		}
 
-		parseMeshesGltf(data, meshes);
+		parseMeshes(data, meshes);
+		parseAnimations(data, animations);
 	}
 	else if (iext && (strcmp(iext, ".obj") == 0 || strcmp(iext, ".OBJ") == 0))
 	{
@@ -4032,8 +4345,17 @@ int gltfpack(const char* input, const char* output, const Settings& settings)
 		return 2;
 	}
 
+	if (data->images_count && settings.texture_basis)
+	{
+		if (!checkBasis())
+		{
+			fprintf(stderr, "Error: basisu is not present in PATH or BASISU_PATH is not set\n");
+			return 3;
+		}
+	}
+
 	std::string json, bin, fallback;
-	process(data, input, output, meshes, settings, json, bin, fallback);
+	process(data, input, output, meshes, animations, settings, json, bin, fallback);
 
 	cgltf_free(data);
 
@@ -4139,6 +4461,7 @@ int main(int argc, char** argv)
 	settings.nrm_bits = 8;
 	settings.anim_freq = 30;
 	settings.simplify_threshold = 1.f;
+	settings.texture_quality = 50;
 
 	const char* input = 0;
 	const char* output = 0;
@@ -4192,6 +4515,15 @@ int main(int argc, char** argv)
 		else if (strcmp(arg, "-tb") == 0)
 		{
 			settings.texture_basis = true;
+		}
+		else if (strcmp(arg, "-tc") == 0)
+		{
+			settings.texture_basis = true;
+			settings.texture_ktx2 = true;
+		}
+		else if (strcmp(arg, "-tq") == 0 && i + 1 < argc && isdigit(argv[i + 1][0]))
+		{
+			settings.texture_quality = atoi(argv[++i]);
 		}
 		else if (strcmp(arg, "-i") == 0 && i + 1 < argc && !input)
 		{
@@ -4263,6 +4595,8 @@ int main(int argc, char** argv)
 		fprintf(stderr, "-sa: aggressively simplify to the target ratio disregarding quality\n");
 		fprintf(stderr, "-te: embed all textures into main buffer\n");
 		fprintf(stderr, "-tb: convert all textures to Basis Universal format (with basisu executable)\n");
+		fprintf(stderr, "-tc: convert all textures to KTX2 with BasisU supercompression (using basisu executable)\n");
+		fprintf(stderr, "-tq N: set texture encoding quality (default: 50; N should be between 1 and 100\n");
 		fprintf(stderr, "-c: produce compressed gltf/glb files\n");
 		fprintf(stderr, "-cf: produce compressed gltf/glb files with fallback for loaders that don't support compression\n");
 		fprintf(stderr, "-v: verbose output\n");
