@@ -146,7 +146,7 @@ namespace bgfx
 		NULL
 	};
 
-	const char* s_uniformTypeName[] =
+    const char* s_uniformTypeNameSh[] =
 	{
 		"int",  "int",
 		NULL,   NULL,
@@ -154,7 +154,7 @@ namespace bgfx
 		"mat3", "float3x3",
 		"mat4", "float4x4",
 	};
-	BX_STATIC_ASSERT(BX_COUNTOF(s_uniformTypeName) == UniformType::Count*2);
+    BX_STATIC_ASSERT(BX_COUNTOF(s_uniformTypeNameSh) == UniformType::Count*2);
 
 	static const char* s_allowedVertexShaderInputs[] =
 	{
@@ -277,23 +277,23 @@ namespace bgfx
 		return _glsl; // centroid, noperspective
 	}
 
-	const char* getUniformTypeName(UniformType::Enum _enum)
+    const char* getUniformTypeNameSh(UniformType::Enum _enum)
 	{
 		uint32_t idx = _enum & ~(BGFX_UNIFORM_FRAGMENTBIT|BGFX_UNIFORM_SAMPLERBIT);
 		if (idx < UniformType::Count)
 		{
-			return s_uniformTypeName[idx];
+            return s_uniformTypeNameSh[idx];
 		}
 
 		return "Unknown uniform type?!";
 	}
 
-	UniformType::Enum nameToUniformTypeEnum(const char* _name)
+    UniformType::Enum nameToUniformTypeEnumSh(const char* _name)
 	{
 		for (uint32_t ii = 0; ii < UniformType::Count*2; ++ii)
 		{
-			if (NULL != s_uniformTypeName[ii]
-			&&  0 == bx::strCmp(_name, s_uniformTypeName[ii]) )
+            if (NULL != s_uniformTypeNameSh[ii]
+            &&  0 == bx::strCmp(_name, s_uniformTypeNameSh[ii]) )
 			{
 				return UniformType::Enum(ii/2);
 			}
@@ -882,6 +882,7 @@ namespace bgfx
 			  "  -f <file path>                Input file path.\n"
 			  "  -i <include path>             Include path (for multiple paths use -i multiple times).\n"
 			  "  -o <file path>                Output file path.\n"
+              "  -c, --console                 Output to console.\n"
 			  "      --bin2c [array name]      Generate C header file. If array name is not specified base file name will be used as name.\n"
 			  "      --depends                 Generate makefile style depends file.\n"
 			  "      --platform <platform>     Target platform.\n"
@@ -2353,10 +2354,11 @@ namespace bgfx
 			return bx::kExitFailure;
 		}
 
+        bool consoleOut = cmdLine.hasArg('c', "console");
 		const char* outFilePath = cmdLine.findOption('o');
-		if (NULL == outFilePath)
+        if (NULL == outFilePath && !consoleOut)
 		{
-			help("Output file name must be specified.");
+            help("Output file name must be specified or use \"-con\"");
 			return bx::kExitFailure;
 		}
 
@@ -2369,7 +2371,7 @@ namespace bgfx
 
 		ShaderCompileOptions options;
 		options.inputFilePath = filePath;
-		options.outputFilePath = outFilePath;
+        options.outputFilePath = consoleOut ? "" : outFilePath;
 		options.shaderType = bx::toLower(type[0]);
 
 		options.disasm = cmdLine.hasArg('\0', "disasm");
@@ -2535,25 +2537,31 @@ namespace bgfx
 
 			bx::FileWriter* writer = NULL;
 
-			if (!bin2c.isEmpty() )
-			{
-				writer = new Bin2cWriter(bin2c);
-			}
-			else
-			{
-				writer = new bx::FileWriter;
-			}
+            if (!consoleOut)
+            {
+                if (!bin2c.isEmpty() )
+                {
+                    writer = new Bin2cWriter(bin2c);
+                }
+                else
+                {
+                    writer = new bx::FileWriter;
+                }
 
-			if (!bx::open(writer, outFilePath) )
-			{
-				bx::printf("Unable to open output file '%s'.", outFilePath);
-				return bx::kExitFailure;
-			}
+                if (!bx::open(writer, outFilePath) )
+                {
+                    bx::printf("Unable to open output file '%s'.", outFilePath);
+                    return bx::kExitFailure;
+                }
+            }
 
-			compiled = compileShader(varying, commandLineComment.c_str(), data, size, options, writer);
+            compiled = compileShader(varying, commandLineComment.c_str(), data, size, options, consoleOut ? bx::getStdOut() : writer);
 
-			bx::close(writer);
-			delete writer;
+            if (!consoleOut)
+            {
+                bx::close(writer);
+                delete writer;
+            }
 		}
 
 		if (compiled)

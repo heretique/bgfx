@@ -23,29 +23,29 @@ BX_PRAGMA_DIAGNOSTIC_POP()
 namespace bgfx
 {
 	static bx::DefaultAllocator s_allocator;
-	bx::AllocatorI* g_allocator = &s_allocator;
+    bx::AllocatorI* g_allocatorSh = &s_allocator;
 
-	struct TinyStlAllocator
+    struct TinyStlAllocatorSh
 	{
 		static void* static_allocate(size_t _bytes);
 		static void static_deallocate(void* _ptr, size_t /*_bytes*/);
 	};
 
-	void* TinyStlAllocator::static_allocate(size_t _bytes)
+    void* TinyStlAllocatorSh::static_allocate(size_t _bytes)
 	{
-		return BX_ALLOC(g_allocator, _bytes);
+        return BX_ALLOC(g_allocatorSh, _bytes);
 	}
 
-	void TinyStlAllocator::static_deallocate(void* _ptr, size_t /*_bytes*/)
+    void TinyStlAllocatorSh::static_deallocate(void* _ptr, size_t /*_bytes*/)
 	{
 		if (NULL != _ptr)
 		{
-			BX_FREE(g_allocator, _ptr);
+            BX_FREE(g_allocatorSh, _ptr);
 		}
 	}
 } // namespace bgfx
 
-#define TINYSTL_ALLOCATOR bgfx::TinyStlAllocator
+#define TINYSTL_ALLOCATOR bgfx::TinyStlAllocatorSh
 #include <tinystl/allocator.h>
 #include <tinystl/string.h>
 #include <tinystl/unordered_map.h>
@@ -654,7 +654,7 @@ namespace bgfx { namespace spirv
 
 			BX_TRACE("%s, %s, %d, %d, %d"
 				, un.name.c_str()
-				, getUniformTypeName(un.type)
+                , getUniformTypeNameSh(un.type)
 				, un.num
 				, un.regIndex
 				, un.regCount

@@ -22,7 +22,7 @@ BX_PRAGMA_DIAGNOSTIC_POP()
 
 namespace bgfx
 {
-	struct TinyStlAllocator
+    struct TinyStlAllocatorSh
 	{
 		static void* static_allocate(size_t _bytes);
 		static void static_deallocate(void* _ptr, size_t /*_bytes*/);
@@ -30,7 +30,7 @@ namespace bgfx
 
 } // namespace bgfx
 
-#define TINYSTL_ALLOCATOR bgfx::TinyStlAllocator
+#define TINYSTL_ALLOCATOR bgfx::TinyStlAllocatorSh
 #include <tinystl/allocator.h>
 #include <tinystl/string.h>
 #include <tinystl/unordered_map.h>
@@ -604,7 +604,7 @@ namespace bgfx { namespace metal
 
 			BX_TRACE("%s, %s, %d, %d, %d"
 				, un.name.c_str()
-				, getUniformTypeName(un.type)
+                , getUniformTypeNameSh(un.type)
 				, un.num
 				, un.regIndex
 				, un.regCount

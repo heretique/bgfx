@@ -739,8 +739,7 @@ namespace bgfx { namespace hlsl
 
 				BX_TRACE("%s, %s, %d, %d, %d"
 					, un.name.c_str()
-					, getUniformTypeName(un.type)
-					, un.num
+                    , getUniformTypeNameSh(un.type)
 					, un.regIndex
 					, un.regCount
 					);
