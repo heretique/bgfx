@@ -2512,6 +2512,17 @@ namespace bgfx
 
 	RendererContextI* rendererCreate(const Init& _init)
 	{
+        if (_init.type != RendererType::Count)
+        {
+            RendererContextI* renderCtx = NULL;
+            renderCtx = s_rendererCreator[_init.type].createFn(_init);
+            if (NULL != renderCtx)
+            {
+                s_rendererCreator[_init.type].supported = false;
+            }
+            return renderCtx;
+        }
+
 		int32_t scores[RendererType::Count];
 		uint32_t numScores = 0;
 
