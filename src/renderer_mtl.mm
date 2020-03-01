@@ -540,6 +540,12 @@ namespace bgfx { namespace mtl
 				||  BX_ENABLED(BX_PLATFORM_OSX)
 				|| (BX_ENABLED(BX_PLATFORM_IOS) && iOSVersionEqualOrGreater("9.0.0") )
 				;
+			
+			m_hasStoreActionStoreAndMultisampleResolve = false
+			|| (BX_ENABLED(BX_PLATFORM_OSX) && macOSVersionEqualOrGreater(10,12,0))
+			|| (BX_ENABLED(BX_PLATFORM_IOS) && iOSVersionEqualOrGreater("10.0.0") )
+			;
+			
 			m_macOS11Runtime = true
 				&& BX_ENABLED(BX_PLATFORM_OSX)
 				&& macOSVersionEqualOrGreater(10,11,0)
@@ -640,7 +646,7 @@ namespace bgfx { namespace mtl
 
 			for (uint32_t ii = 1, last = 0; ii < BX_COUNTOF(s_msaa); ++ii)
 			{
-				const int32_t sampleCount = 1; //1<<ii;
+				const int32_t sampleCount = 1<<ii;
 				if (m_device.supportsTextureSampleCount(sampleCount) )
 				{
 					s_msaa[ii] = sampleCount;
@@ -1333,6 +1339,9 @@ namespace bgfx { namespace mtl
 					if (NULL != desc.texture)
 					{
 						desc.loadAction = MTLLoadActionLoad;
+						desc.storeAction = desc.resolveTexture == nil ?
+											MTLStoreActionStore :
+											MTLStoreActionMultisampleResolve;
 					}
 				}
 
@@ -1340,14 +1349,18 @@ namespace bgfx { namespace mtl
 				if (NULL != depthAttachment.texture)
 				{
 					depthAttachment.loadAction = MTLLoadActionLoad;
-					depthAttachment.storeAction = MTLStoreActionStore;
+					depthAttachment.storeAction = depthAttachment.resolveTexture == nil ?
+													MTLStoreActionStore :
+													MTLStoreActionMultisampleResolve;
 				}
 
 				RenderPassStencilAttachmentDescriptor stencilAttachment = renderPassDescriptor.stencilAttachment;
 				if (NULL != stencilAttachment.texture)
 				{
 					stencilAttachment.loadAction   = MTLLoadActionLoad;
-					stencilAttachment.storeAction  = MTLStoreActionStore;
+					stencilAttachment.storeAction = stencilAttachment.resolveTexture == nil ?
+													MTLStoreActionStore :
+													MTLStoreActionMultisampleResolve;
 				}
 
 				m_renderCommandEncoder = m_commandBuffer.renderCommandEncoderWithDescriptor(renderPassDescriptor);
@@ -2292,6 +2305,7 @@ namespace bgfx { namespace mtl
 		bool m_iOS9Runtime;
 		bool m_macOS11Runtime;
 		bool m_hasPixelFormatDepth32Float_Stencil8;
+		bool m_hasStoreActionStoreAndMultisampleResolve;
 
 		Buffer   m_uniformBuffer;
 		Buffer   m_uniformBuffers[MTL_MAX_FRAMES_IN_FLIGHT];
@@ -2835,7 +2849,20 @@ namespace bgfx { namespace mtl
 	void TextureMtl::update(uint8_t _side, uint8_t _mip, const Rect& _rect, uint16_t _z, uint16_t _depth, uint16_t _pitch, const Memory* _mem)
 	{
 		const uint32_t bpp       = bimg::getBitsPerPixel(bimg::TextureFormat::Enum(m_textureFormat) );
-		const uint32_t rectpitch = _rect.m_width*bpp/8;
+		uint32_t rectpitch  = _rect.m_width*bpp/8;
+		if (bimg::isCompressed(bimg::TextureFormat::Enum(m_textureFormat)))
+		{
+			if (m_ptr.pixelFormat() >= 160 /*PVRTC_RGB_2BPP*/
+			&&  m_ptr.pixelFormat() <= 167 /*PVRTC_RGBA_4BPP_sRGB*/)
+			{
+				rectpitch   = 0;
+			}
+			else
+			{
+				const bimg::ImageBlockInfo& blockInfo = bimg::getBlockInfo(bimg::TextureFormat::Enum(m_textureFormat));
+				rectpitch = (_rect.m_width / blockInfo.blockWidth)*blockInfo.blockSize;
+			}
+		}
 		const uint32_t srcpitch  = UINT16_MAX == _pitch ? rectpitch : _pitch;
 		const uint32_t slice     = ( (m_type == Texture3D) ? 0 : _side + _z * (m_type == TextureCube ? 6 : 1) );
 		const uint16_t zz        = (m_type == Texture3D) ? _z : 0 ;
@@ -2876,30 +2903,35 @@ namespace bgfx { namespace mtl
 		{
 			BlitCommandEncoder bce = s_renderMtl->getBlitCommandEncoder();
 
-			const uint32_t dstpitch = bx::strideAlign(rectpitch, 64);
-
-			Buffer tempBuffer = s_renderMtl->m_device.newBufferWithLength(dstpitch*_rect.m_height, 0);
-
-			const uint8_t* src = (uint8_t*)data;
-			uint8_t* dst = (uint8_t*)tempBuffer.contents();
-
-			for (uint32_t yy = 0; yy < _rect.m_height; ++yy, src += srcpitch, dst += dstpitch)
+			TextureDescriptor desc = s_renderMtl->m_textureDescriptor;
+			desc.textureType = _depth > 1 ? MTLTextureType3D : MTLTextureType2D;
+			desc.pixelFormat = m_ptr.pixelFormat();
+			desc.width  = _rect.m_width;
+			desc.height = _rect.m_height;
+			desc.depth  = _depth;
+			desc.mipmapLevelCount = 1;
+			desc.sampleCount = 1;
+			desc.arrayLength = 1;
+			if (s_renderMtl->m_iOS9Runtime
+				||  s_renderMtl->m_macOS11Runtime)
 			{
-				bx::memCopy(dst, src, rectpitch);
+				desc.cpuCacheMode = MTLCPUCacheModeDefaultCache;
+				desc.storageMode  = BX_ENABLED(BX_PLATFORM_IOS)
+				? (MTLStorageMode)0 // MTLStorageModeShared
+				: (MTLStorageMode)1 // MTLStorageModeManaged
+				;
+				desc.usage        = 0;
 			}
-
-			bce.copyFromBuffer(
-				  tempBuffer
-				, 0
-				, dstpitch
-				, dstpitch * _rect.m_height
-				, MTLSizeMake(_rect.m_width, _rect.m_height, _depth)
-				, m_ptr
-				, slice
-				, _mip
-				, MTLOriginMake(_rect.m_x, _rect.m_y, zz)
-				);
-			release(tempBuffer);
+			Texture tempTexture = s_renderMtl->m_device.newTextureWithDescriptor(desc);
+			MTLRegion region =
+			{
+				{ 0,     0,      0     },
+				{ _rect.m_width, _rect.m_height, _depth },
+			};
+			tempTexture.replaceRegion(region, 0, 0, data, srcpitch, srcpitch * _rect.m_height);
+			bce.copyFromTexture(tempTexture, 0, 0,  MTLOriginMake(0,0,0), MTLSizeMake(_rect.m_width, _rect.m_height, _depth),
+								m_ptr, slice, _mip, MTLOriginMake(_rect.m_x, _rect.m_y, zz));
+			release(tempTexture);
 		}
 
 		if (NULL != temp)
@@ -3873,7 +3905,17 @@ namespace bgfx { namespace mtl
 											desc.loadAction = MTLLoadActionLoad;
 										}
 
-										desc.storeAction = desc.texture.sampleCount > 1 ? MTLStoreActionMultisampleResolve : MTLStoreActionStore;
+										if ( NULL != m_capture &&
+											!isValid(fbh) &&
+											m_hasStoreActionStoreAndMultisampleResolve)
+										{
+											desc.storeAction = desc.texture.sampleCount > 1 ? MTLStoreActionStoreAndMultisampleResolve : MTLStoreActionStore;
+
+										}
+										else
+										{
+											desc.storeAction = desc.texture.sampleCount > 1 ? MTLStoreActionMultisampleResolve : MTLStoreActionStore;
+										}
 									}
 								}
 

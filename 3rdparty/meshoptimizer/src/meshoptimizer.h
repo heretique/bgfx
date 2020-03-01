@@ -1,7 +1,7 @@
 /**
  * meshoptimizer - version 0.13
  *
- * Copyright (C) 2016-2019, by Arseny Kapoulkine (arseny.kapoulkine@gmail.com)
+ * Copyright (C) 2016-2020, by Arseny Kapoulkine (arseny.kapoulkine@gmail.com)
  * Report bugs and download new versions at https://github.com/zeux/meshoptimizer
  *
  * This library is distributed under the MIT License. See notice at the end of this file.
@@ -202,6 +202,20 @@ MESHOPTIMIZER_API size_t meshopt_encodeVertexBufferBound(size_t vertex_count, si
  * destination must contain enough space for the resulting vertex buffer (vertex_count * vertex_size bytes)
  */
 MESHOPTIMIZER_API int meshopt_decodeVertexBuffer(void* destination, size_t vertex_count, size_t vertex_size, const unsigned char* buffer, size_t buffer_size);
+
+/**
+ * Vertex buffer filters
+ * These functions can be used to filter output of meshopt_decodeVertexBuffer in-place.
+ * count must be aligned by 4 and stride is fixed for each function to facilitate SIMD implementation.
+ *
+ * meshopt_decodeFilterOct decodes octahedral encoding of a unit vector with K-bit (K <= 16) signed X/Y as an input; Z must store 1.0f.
+ * Each component is stored as an 8-bit or 16-bit normalized integer; stride must be equal to 4 or 8. W is preserved as is.
+ *
+ * meshopt_decodeFilterQuat decodes 3-component quaternion encoding with 12-bit component encoding and a 2-bit component index indicating which component to reconstruct.
+ * Each component is stored as an 16-bit integer; stride must be equal to 8.
+ */
+MESHOPTIMIZER_EXPERIMENTAL void meshopt_decodeFilterOct(void* buffer, size_t vertex_count, size_t vertex_size);
+MESHOPTIMIZER_EXPERIMENTAL void meshopt_decodeFilterQuat(void* buffer, size_t vertex_count, size_t vertex_size);
 
 /**
  * Experimental: Mesh simplifier
@@ -851,7 +865,7 @@ inline void meshopt_spatialSortTriangles(T* destination, const T* indices, size_
 #endif
 
 /**
- * Copyright (c) 2016-2019 Arseny Kapoulkine
+ * Copyright (c) 2016-2020 Arseny Kapoulkine
  *
  * Permission is hereby granted, free of charge, to any person
  * obtaining a copy of this software and associated documentation
