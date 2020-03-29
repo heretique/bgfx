@@ -54,6 +54,8 @@ static_assert(int(GLSLANG_TEX_SAMP_TRANS_COUNT) == EShTexSampTransCount, "");
 static_assert(int(GLSLANG_MSG_COUNT) == EShMsgCount, "");
 static_assert(int(GLSLANG_REFLECTION_COUNT) == EShReflectionCount, "");
 static_assert(int(GLSLANG_PROFILE_COUNT) == EProfileCount, "");
+static_assert(sizeof(glslang_limits_t) == sizeof(TLimits), "");
+static_assert(sizeof(glslang_resource_t) == sizeof(TBuiltInResource), "");
 
 typedef struct glslang_shader_s {
     glslang::TShader* shader;
@@ -181,17 +183,17 @@ static EShLanguage c_shader_stage(glslang_stage_t stage)
     case GLSLANG_STAGE_COMPUTE:
         return EShLangCompute;
     case GLSLANG_STAGE_RAYGEN_NV:
-        return EShLangRayGenNV;
+        return EShLangRayGen;
     case GLSLANG_STAGE_INTERSECT_NV:
-        return EShLangIntersectNV;
+        return EShLangIntersect;
     case GLSLANG_STAGE_ANYHIT_NV:
-        return EShLangAnyHitNV;
+        return EShLangAnyHit;
     case GLSLANG_STAGE_CLOSESTHIT_NV:
-        return EShLangClosestHitNV;
+        return EShLangClosestHit;
     case GLSLANG_STAGE_MISS_NV:
-        return EShLangMissNV;
+        return EShLangMiss;
     case GLSLANG_STAGE_CALLABLE_NV:
-        return EShLangCallableNV;
+        return EShLangCallable;
     case GLSLANG_STAGE_TASK_NV:
         return EShLangTaskNV;
     case GLSLANG_STAGE_MESH_NV:
@@ -350,15 +352,19 @@ const char* glslang_shader_get_preprocessed_code(glslang_shader_t* shader)
     return shader->preprocessedGLSL.c_str();
 }
 
-int glslang_shader_preprocess(glslang_shader_t* shader, const glslang_input_t* i)
+int glslang_shader_preprocess(glslang_shader_t* shader, const glslang_input_t* input)
 {
     DirStackFileIncluder Includer;
     /* TODO: use custom callbacks if they are available in 'i->callbacks' */
     return shader->shader->preprocess(
-        /* No user-defined resources limit */
-        &glslang::DefaultTBuiltInResource, i->default_version, c_shader_profile(i->default_profile),
-        i->force_default_version_and_profile != 0, i->forward_compatible != 0,
-        (EShMessages)c_shader_messages(i->messages), &shader->preprocessedGLSL, Includer
+        reinterpret_cast<const TBuiltInResource*>(input->resource),
+        input->default_version,
+        c_shader_profile(input->default_profile),
+        input->force_default_version_and_profile != 0,
+        input->forward_compatible != 0,
+        (EShMessages)c_shader_messages(input->messages),
+        &shader->preprocessedGLSL,
+        Includer
     );
 }
 
@@ -368,9 +374,11 @@ int glslang_shader_parse(glslang_shader_t* shader, const glslang_input_t* input)
     shader->shader->setStrings(&preprocessedCStr, 1);
 
     return shader->shader->parse(
-        /* No user-defined resource limits for now */
-        &glslang::DefaultTBuiltInResource, input->default_version, input->forward_compatible != 0,
-        (EShMessages)c_shader_messages(input->messages));
+        reinterpret_cast<const TBuiltInResource*>(input->resource),
+        input->default_version,
+        input->forward_compatible != 0,
+        (EShMessages)c_shader_messages(input->messages)
+    );
 }
 
 const char* glslang_shader_get_info_log(glslang_shader_t* shader) { return shader->shader->getInfoLog(); }

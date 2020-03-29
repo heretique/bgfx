@@ -125,16 +125,10 @@ function bgfxProjectBase(_kind, _defines)
 			"-weak_framework MetalKit",
 		}
 
-	configuration { "not linux-steamlink", "not NX32", "not NX64" }
+	configuration { "not NX32", "not NX64" }
 		includedirs {
-			-- steamlink has EGL headers modified...
 			-- NX has EGL headers modified...
 			path.join(BGFX_DIR, "3rdparty/khronos"),
-		}
-
-	configuration { "linux-steamlink" }
-		defines {
-			"EGL_API_FB",
 		}
 
 	configuration {}
@@ -176,7 +170,7 @@ function bgfxProjectBase(_kind, _defines)
 			path.join(BGFX_DIR, "src/renderer_**.cpp"),
 			path.join(BGFX_DIR, "src/shader**.cpp"),
 			path.join(BGFX_DIR, "src/topology.cpp"),
-			path.join(BGFX_DIR, "src/vertexdecl.cpp"),
+			path.join(BGFX_DIR, "src/vertexlayout.cpp"),
 		}
 
 		configuration { "xcode* or osx or ios*" }
