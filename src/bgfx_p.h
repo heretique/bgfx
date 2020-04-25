@@ -1335,7 +1335,7 @@ constexpr uint64_t kSortKeyComputeProgramMask  = uint64_t(BGFX_CONFIG_MAX_PROGRA
 		{
 			const uint32_t structSize = sizeof(UniformBuffer)-sizeof(UniformBuffer::m_buffer);
 
-			uint32_t size = BX_ALIGN_16(_size);
+			uint32_t size = bx::alignUp(_size, 16);
 			void*    data = BX_ALLOC(g_allocator, size+structSize);
 			return BX_PLACEMENT_NEW(data, UniformBuffer)(size);
 		}
@@ -1352,7 +1352,7 @@ constexpr uint64_t kSortKeyComputeProgramMask  = uint64_t(BGFX_CONFIG_MAX_PROGRA
 			if (_treshold >= uniformBuffer->m_size - uniformBuffer->m_pos)
 			{
 				const uint32_t structSize = sizeof(UniformBuffer)-sizeof(UniformBuffer::m_buffer);
-				uint32_t size = BX_ALIGN_16(uniformBuffer->m_size + _grow);
+				uint32_t size = bx::alignUp(uniformBuffer->m_size + _grow, 16);
 				void*    data = BX_REALLOC(g_allocator, uniformBuffer, size+structSize);
 				uniformBuffer = reinterpret_cast<UniformBuffer*>(data);
 				uniformBuffer->m_size = size;
@@ -1545,7 +1545,7 @@ constexpr uint64_t kSortKeyComputeProgramMask  = uint64_t(BGFX_CONFIG_MAX_PROGRA
 	{
 		void clear(uint8_t _flags = BGFX_DISCARD_ALL)
 		{
-			if (0 != (_flags & BGFX_DISCARD_TEXTURE_SAMPLERS) )
+			if (0 != (_flags & BGFX_DISCARD_BINDINGS) )
 			{
 				for (uint32_t ii = 0; ii < BGFX_CONFIG_MAX_TEXTURE_SAMPLERS; ++ii)
 				{
@@ -1566,40 +1566,49 @@ constexpr uint64_t kSortKeyComputeProgramMask  = uint64_t(BGFX_CONFIG_MAX_PROGRA
 		{
 			if (0 != (_flags & BGFX_DISCARD_STATE) )
 			{
-				m_uniformBegin = 0;
-				m_uniformEnd   = 0;
-				m_stateFlags   = BGFX_STATE_DEFAULT;
-				m_stencil      = packStencil(BGFX_STENCIL_DEFAULT, BGFX_STENCIL_DEFAULT);
-				m_rgba         = 0;
-				m_startMatrix  = 0;
-				m_startIndex   = 0;
-				m_numIndices   = UINT32_MAX;
-				m_numVertices  = UINT32_MAX;
+				m_uniformBegin  = 0;
+				m_uniformEnd    = 0;
+				m_uniformIdx    = UINT8_MAX;
+
+				m_stateFlags    = BGFX_STATE_DEFAULT;
+				m_stencil       = packStencil(BGFX_STENCIL_DEFAULT, BGFX_STENCIL_DEFAULT);
+				m_rgba          = 0;
+				m_scissor       = UINT16_MAX;
+			}
+
+			if (0 != (_flags & BGFX_DISCARD_TRANSFORM) )
+			{
+				m_startMatrix = 0;
+				m_numMatrices = 1;
+			}
+
+			if (0 != (_flags & BGFX_DISCARD_INSTANCE_DATA) )
+			{
 				m_instanceDataOffset = 0;
 				m_instanceDataStride = 0;
 				m_numInstances       = 1;
-				m_startIndirect = 0;
-				m_numIndirect   = UINT16_MAX;
-				m_numMatrices   = 1;
-				m_submitFlags   = 0;
-				m_scissor       = UINT16_MAX;
-
 				m_instanceDataBuffer.idx = kInvalidHandle;
-				m_indirectBuffer.idx     = kInvalidHandle;
-				m_occlusionQuery.idx     = kInvalidHandle;
-				m_uniformIdx = UINT8_MAX;
 			}
 
 			if (0 != (_flags & BGFX_DISCARD_VERTEX_STREAMS) )
 			{
-				m_streamMask = 0;
+				m_numVertices = UINT32_MAX;
+				m_streamMask  = 0;
 				m_stream[0].clear();
 			}
 
 			if (0 != (_flags & BGFX_DISCARD_INDEX_BUFFER) )
 			{
+				m_startIndex      = 0;
+				m_numIndices      = UINT32_MAX;
 				m_indexBuffer.idx = kInvalidHandle;
 			}
+
+			m_submitFlags   = 0;
+			m_startIndirect = 0;
+			m_numIndirect   = UINT16_MAX;
+			m_indirectBuffer.idx = kInvalidHandle;
+			m_occlusionQuery.idx = kInvalidHandle;
 		}
 
 		bool setStreamBit(uint8_t _stream, VertexBufferHandle _handle)
@@ -1640,24 +1649,28 @@ constexpr uint64_t kSortKeyComputeProgramMask  = uint64_t(BGFX_CONFIG_MAX_PROGRA
 
 	BX_ALIGN_DECL_CACHE_LINE(struct) RenderCompute
 	{
-		void clear(uint8_t _flags = BGFX_DISCARD_ALL)
+		void clear(uint8_t _flags)
 		{
-			if (0 != (_flags & BGFX_DISCARD_COMPUTE) )
+			if (0 != (_flags & BGFX_DISCARD_STATE) )
 			{
 				m_uniformBegin = 0;
 				m_uniformEnd   = 0;
-				m_startMatrix  = 0;
-				m_numX         = 0;
-				m_numY         = 0;
-				m_numZ         = 0;
-				m_numMatrices  = 0;
-				m_submitFlags  = 0;
 				m_uniformIdx   = UINT8_MAX;
-
-				m_indirectBuffer.idx = kInvalidHandle;
-				m_startIndirect      = 0;
-				m_numIndirect        = UINT16_MAX;
 			}
+
+			if (0 != (_flags & BGFX_DISCARD_TRANSFORM) )
+			{
+				m_startMatrix = 0;
+				m_numMatrices = 0;
+			}
+
+			m_numX               = 0;
+			m_numY               = 0;
+			m_numZ               = 0;
+			m_submitFlags        = 0;
+			m_indirectBuffer.idx = kInvalidHandle;
+			m_startIndirect      = 0;
+			m_numIndirect        = UINT16_MAX;
 		}
 
 		uint32_t m_uniformBegin;
@@ -2201,7 +2214,7 @@ constexpr uint64_t kSortKeyComputeProgramMask  = uint64_t(BGFX_CONFIG_MAX_PROGRA
 	{
 		EncoderImpl()
 		{
-			discard();
+			discard(BGFX_DISCARD_ALL);
 		}
 
 		void begin(Frame* _frame, uint8_t _idx)
@@ -2496,7 +2509,7 @@ constexpr uint64_t kSortKeyComputeProgramMask  = uint64_t(BGFX_CONFIG_MAX_PROGRA
 			bind.m_mip    = _mip;
 		}
 
-		void discard(uint8_t _flags = BGFX_DISCARD_ALL)
+		void discard(uint8_t _flags)
 		{
 			if (BX_ENABLED(BGFX_CONFIG_DEBUG_UNIFORM) )
 			{
@@ -2509,9 +2522,9 @@ constexpr uint64_t kSortKeyComputeProgramMask  = uint64_t(BGFX_CONFIG_MAX_PROGRA
 			m_bind.clear(_flags);
 		}
 
-		void submit(ViewId _id, ProgramHandle _program, OcclusionQueryHandle _occlusionQuery, uint32_t _depth, uint8_t _flags = BGFX_DISCARD_ALL);
+		void submit(ViewId _id, ProgramHandle _program, OcclusionQueryHandle _occlusionQuery, uint32_t _depth, uint8_t _flags);
 
-		void submit(ViewId _id, ProgramHandle _program, IndirectBufferHandle _indirectHandle, uint16_t _start, uint16_t _num, uint32_t _depth, uint8_t _flags = BGFX_DISCARD_ALL)
+		void submit(ViewId _id, ProgramHandle _program, IndirectBufferHandle _indirectHandle, uint16_t _start, uint16_t _num, uint32_t _depth, uint8_t _flags)
 		{
 			m_draw.m_startIndirect  = _start;
 			m_draw.m_numIndirect    = _num;
@@ -2520,14 +2533,14 @@ constexpr uint64_t kSortKeyComputeProgramMask  = uint64_t(BGFX_CONFIG_MAX_PROGRA
 			submit(_id, _program, handle, _depth, _flags);
 		}
 
-		void dispatch(ViewId _id, ProgramHandle _handle, uint32_t _ngx, uint32_t _ngy, uint32_t _ngz);
+		void dispatch(ViewId _id, ProgramHandle _handle, uint32_t _ngx, uint32_t _ngy, uint32_t _ngz, uint8_t _flags);
 
-		void dispatch(ViewId _id, ProgramHandle _handle, IndirectBufferHandle _indirectHandle, uint16_t _start, uint16_t _num)
+		void dispatch(ViewId _id, ProgramHandle _handle, IndirectBufferHandle _indirectHandle, uint16_t _start, uint16_t _num, uint8_t _flags)
 		{
 			m_compute.m_indirectBuffer = _indirectHandle;
 			m_compute.m_startIndirect  = _start;
 			m_compute.m_numIndirect    = _num;
-			dispatch(_id, _handle, 0, 0, 0);
+			dispatch(_id, _handle, 0, 0, 0, _flags);
 		}
 
 		void blit(ViewId _id, TextureHandle _dst, uint8_t _dstMip, uint16_t _dstX, uint16_t _dstY, uint16_t _dstZ, TextureHandle _src, uint8_t _srcMip, uint16_t _srcX, uint16_t _srcY, uint16_t _srcZ, uint16_t _width, uint16_t _height, uint16_t _depth);
@@ -2565,7 +2578,7 @@ constexpr uint64_t kSortKeyComputeProgramMask  = uint64_t(BGFX_CONFIG_MAX_PROGRA
 
 		void init()
 		{
-			bx::memSet(m_layoutRef,          0,    sizeof(m_layoutRef)          );
+			bx::memSet(m_vertexLayoutRef,           0, sizeof(m_vertexLayoutRef)        );
 			bx::memSet(m_vertexBufferRef,        0xff, sizeof(m_vertexBufferRef)        );
 			bx::memSet(m_dynamicVertexBufferRef, 0xff, sizeof(m_dynamicVertexBufferRef) );
 		}
@@ -2576,51 +2589,51 @@ constexpr uint64_t kSortKeyComputeProgramMask  = uint64_t(BGFX_CONFIG_MAX_PROGRA
 			for (uint16_t ii = 0, num = _handleAlloc.getNumHandles(); ii < num; ++ii)
 			{
 				VertexLayoutHandle handle = { _handleAlloc.getHandleAt(ii) };
-				m_layoutRef[handle.idx] = 0;
-				m_layoutMap.removeByHandle(handle.idx);
+				m_vertexLayoutRef[handle.idx] = 0;
+				m_vertexLayoutMap.removeByHandle(handle.idx);
 				_handleAlloc.free(handle.idx);
 			}
 
-			m_layoutMap.reset();
+			m_vertexLayoutMap.reset();
 		}
 
 		VertexLayoutHandle find(uint32_t _hash)
 		{
-			VertexLayoutHandle handle = { m_layoutMap.find(_hash) };
+			VertexLayoutHandle handle = { m_vertexLayoutMap.find(_hash) };
 			return handle;
 		}
 
 		void add(VertexLayoutHandle _layoutHandle, uint32_t _hash)
 		{
-			m_layoutRef[_layoutHandle.idx]++;
-			m_layoutMap.insert(_hash, _layoutHandle.idx);
+			m_vertexLayoutRef[_layoutHandle.idx]++;
+			m_vertexLayoutMap.insert(_hash, _layoutHandle.idx);
 		}
 
 		void add(VertexBufferHandle _handle, VertexLayoutHandle _layoutHandle, uint32_t _hash)
 		{
 			BX_CHECK(m_vertexBufferRef[_handle.idx].idx == kInvalidHandle, "");
 			m_vertexBufferRef[_handle.idx] = _layoutHandle;
-			m_layoutRef[_layoutHandle.idx]++;
-			m_layoutMap.insert(_hash, _layoutHandle.idx);
+			m_vertexLayoutRef[_layoutHandle.idx]++;
+			m_vertexLayoutMap.insert(_hash, _layoutHandle.idx);
 		}
 
 		void add(DynamicVertexBufferHandle _handle, VertexLayoutHandle _layoutHandle, uint32_t _hash)
 		{
 			BX_CHECK(m_dynamicVertexBufferRef[_handle.idx].idx == kInvalidHandle, "");
 			m_dynamicVertexBufferRef[_handle.idx] = _layoutHandle;
-			m_layoutRef[_layoutHandle.idx]++;
-			m_layoutMap.insert(_hash, _layoutHandle.idx);
+			m_vertexLayoutRef[_layoutHandle.idx]++;
+			m_vertexLayoutMap.insert(_hash, _layoutHandle.idx);
 		}
 
 		VertexLayoutHandle release(VertexLayoutHandle _layoutHandle)
 		{
 			if (isValid(_layoutHandle) )
 			{
-				m_layoutRef[_layoutHandle.idx]--;
+				m_vertexLayoutRef[_layoutHandle.idx]--;
 
-				if (0 == m_layoutRef[_layoutHandle.idx])
+				if (0 == m_vertexLayoutRef[_layoutHandle.idx])
 				{
-					m_layoutMap.removeByHandle(_layoutHandle.idx);
+					m_vertexLayoutMap.removeByHandle(_layoutHandle.idx);
 					return _layoutHandle;
 				}
 			}
@@ -2647,9 +2660,9 @@ constexpr uint64_t kSortKeyComputeProgramMask  = uint64_t(BGFX_CONFIG_MAX_PROGRA
 		}
 
 		typedef bx::HandleHashMapT<BGFX_CONFIG_MAX_VERTEX_LAYOUTS*2> VertexLayoutMap;
-		VertexLayoutMap m_layoutMap;
+		VertexLayoutMap m_vertexLayoutMap;
 
-		uint16_t m_layoutRef[BGFX_CONFIG_MAX_VERTEX_LAYOUTS];
+		uint16_t m_vertexLayoutRef[BGFX_CONFIG_MAX_VERTEX_LAYOUTS];
 		VertexLayoutHandle m_vertexBufferRef[BGFX_CONFIG_MAX_VERTEX_BUFFERS];
 		VertexLayoutHandle m_dynamicVertexBufferRef[BGFX_CONFIG_MAX_DYNAMIC_VERTEX_BUFFERS];
 	};
@@ -3206,7 +3219,7 @@ constexpr uint64_t kSortKeyComputeProgramMask  = uint64_t(BGFX_CONFIG_MAX_PROGRA
 			}
 
 			const uint32_t indexSize = 0 == (_flags & BGFX_BUFFER_INDEX32) ? 2 : 4;
-			uint32_t size = BX_ALIGN_16(_num*indexSize);
+			const uint32_t size = bx::alignUp(_num*indexSize, 16);
 
 			uint64_t ptr = 0;
 			if (0 != (_flags & BGFX_BUFFER_COMPUTE_READ_WRITE) )
@@ -3570,9 +3583,12 @@ constexpr uint64_t kSortKeyComputeProgramMask  = uint64_t(BGFX_CONFIG_MAX_PROGRA
 				uint16_t flags = BGFX_BUFFER_NONE;
 				cmdbuf.write(flags);
 
-				const uint32_t size = BX_ALIGN_16(sizeof(TransientIndexBuffer) ) + BX_ALIGN_16(_size);
+				const uint32_t size = 0
+					+ bx::alignUp(sizeof(TransientIndexBuffer), 16)
+					+ bx::alignUp(_size, 16)
+					;
 				tib = (TransientIndexBuffer*)BX_ALIGNED_ALLOC(g_allocator, size, 16);
-				tib->data   = (uint8_t *)tib + BX_ALIGN_16(sizeof(TransientIndexBuffer) );
+				tib->data   = (uint8_t *)tib + bx::alignUp(sizeof(TransientIndexBuffer), 16);
 				tib->size   = _size;
 				tib->handle = handle;
 
@@ -3631,9 +3647,12 @@ constexpr uint64_t kSortKeyComputeProgramMask  = uint64_t(BGFX_CONFIG_MAX_PROGRA
 				uint16_t flags = BGFX_BUFFER_NONE;
 				cmdbuf.write(flags);
 
-				const uint32_t size = BX_ALIGN_16(sizeof(TransientVertexBuffer) ) + BX_ALIGN_16(_size);
+				const uint32_t size = 0
+					+ bx::alignUp(sizeof(TransientVertexBuffer), 16)
+					+ bx::alignUp(_size, 16)
+					;
 				tvb = (TransientVertexBuffer*)BX_ALIGNED_ALLOC(g_allocator, size, 16);
-				tvb->data = (uint8_t *)tvb + BX_ALIGN_16(sizeof(TransientVertexBuffer) );
+				tvb->data = (uint8_t *)tvb + bx::alignUp(sizeof(TransientVertexBuffer), 16);
 				tvb->size = _size;
 				tvb->startVertex = 0;
 				tvb->stride = stride;
@@ -3687,8 +3706,8 @@ constexpr uint64_t kSortKeyComputeProgramMask  = uint64_t(BGFX_CONFIG_MAX_PROGRA
 		{
 			BGFX_MUTEX_SCOPE(m_resourceApiLock);
 
-			uint16_t stride = BX_ALIGN_16(_stride);
-			uint32_t offset = m_submit->allocTransientVertexBuffer(_num, stride);
+			const uint16_t stride = bx::alignUp(_stride, 16);
+			const uint32_t offset = m_submit->allocTransientVertexBuffer(_num, stride);
 
 			TransientVertexBuffer& dvb = *m_submit->m_transientVb;
 			_idb->data   = &dvb.data[offset];

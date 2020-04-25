@@ -533,39 +533,44 @@ public static partial class bgfx
 	public enum DiscardFlags : uint
 	{
 		/// <summary>
-		/// Discard nothing
+		/// Preserve everything.
 		/// </summary>
 		None                   = 0x00000000,
 	
 		/// <summary>
-		/// Discard only Index Buffer
+		/// Discard texture sampler and buffer bindings.
 		/// </summary>
-		IndexBuffer            = 0x00000001,
+		Bindings               = 0x00000001,
 	
 		/// <summary>
-		/// Discard only Vertex Streams
+		/// Discard index buffer.
 		/// </summary>
-		VertexStreams          = 0x00000002,
+		IndexBuffer            = 0x00000002,
 	
 		/// <summary>
-		/// Discard only texture samplers
+		/// Discard instance data.
 		/// </summary>
-		TextureSamplers        = 0x00000004,
+		InstanceData           = 0x00000004,
 	
 		/// <summary>
-		/// Discard only Compute shader related state
+		/// Discard state.
 		/// </summary>
-		Compute                = 0x00000008,
+		State                  = 0x00000008,
 	
 		/// <summary>
-		/// Discard only state
+		/// Discard transform.
 		/// </summary>
-		State                  = 0x00000010,
+		Transform              = 0x00000010,
 	
 		/// <summary>
-		/// Discard every rendering states
+		/// Discard vertex streams.
 		/// </summary>
-		All                    = 0x0000001f,
+		VertexStreams          = 0x00000020,
+	
+		/// <summary>
+		/// Discard all states.
+		/// </summary>
+		All                    = 0x000000ff,
 	}
 	
 	[Flags]
@@ -3618,7 +3623,7 @@ public static partial class bgfx
 	/// <param name="_handle">Vertex buffer.</param>
 	/// <param name="_startVertex">First vertex to render.</param>
 	/// <param name="_numVertices">Number of vertices to render.</param>
-	/// <param name="_layoutHandle">Vertex layout for aliasing vertex buffer.</param>
+	/// <param name="_layoutHandle">Vertex layout for aliasing vertex buffer. If invalid handle is used, vertex layout used for creation of vertex buffer will be used.</param>
 	///
 	[DllImport(DllName, EntryPoint="bgfx_encoder_set_vertex_buffer", CallingConvention = CallingConvention.Cdecl)]
 	public static extern unsafe void encoder_set_vertex_buffer(Encoder* _this, byte _stream, VertexBufferHandle _handle, uint _startVertex, uint _numVertices, VertexLayoutHandle _layoutHandle);
@@ -3631,7 +3636,7 @@ public static partial class bgfx
 	/// <param name="_handle">Dynamic vertex buffer.</param>
 	/// <param name="_startVertex">First vertex to render.</param>
 	/// <param name="_numVertices">Number of vertices to render.</param>
-	/// <param name="_layoutHandle">Vertex layout for aliasing vertex buffer.</param>
+	/// <param name="_layoutHandle">Vertex layout for aliasing vertex buffer. If invalid handle is used, vertex layout used for creation of vertex buffer will be used.</param>
 	///
 	[DllImport(DllName, EntryPoint="bgfx_encoder_set_dynamic_vertex_buffer", CallingConvention = CallingConvention.Cdecl)]
 	public static extern unsafe void encoder_set_dynamic_vertex_buffer(Encoder* _this, byte _stream, DynamicVertexBufferHandle _handle, uint _startVertex, uint _numVertices, VertexLayoutHandle _layoutHandle);
@@ -3644,7 +3649,7 @@ public static partial class bgfx
 	/// <param name="_tvb">Transient vertex buffer.</param>
 	/// <param name="_startVertex">First vertex to render.</param>
 	/// <param name="_numVertices">Number of vertices to render.</param>
-	/// <param name="_layoutHandle">Vertex layout for aliasing vertex buffer.</param>
+	/// <param name="_layoutHandle">Vertex layout for aliasing vertex buffer. If invalid handle is used, vertex layout used for creation of vertex buffer will be used.</param>
 	///
 	[DllImport(DllName, EntryPoint="bgfx_encoder_set_transient_vertex_buffer", CallingConvention = CallingConvention.Cdecl)]
 	public static extern unsafe void encoder_set_transient_vertex_buffer(Encoder* _this, byte _stream, TransientVertexBuffer* _tvb, uint _startVertex, uint _numVertices, VertexLayoutHandle _layoutHandle);
@@ -3716,7 +3721,9 @@ public static partial class bgfx
 	
 	/// <summary>
 	/// Submit an empty primitive for rendering. Uniforms and draw state
-	/// will be applied but no geometry will be submitted.
+	/// will be applied but no geometry will be submitted. Useful in cases
+	/// when no other draw/compute primitive is submitted to view, but it's
+	/// desired to execute clear view.
 	/// @remark
 	///   These empty draw calls will sort before ordinary draw calls.
 	/// </summary>
@@ -3733,7 +3740,7 @@ public static partial class bgfx
 	/// <param name="_id">View id.</param>
 	/// <param name="_program">Program.</param>
 	/// <param name="_depth">Depth for sorting.</param>
-	/// <param name="_flags">Which states to discard for next draw. See BGFX_DISCARD_</param>
+	/// <param name="_flags">Discard or preserve states. See `BGFX_DISCARD_*`.</param>
 	///
 	[DllImport(DllName, EntryPoint="bgfx_encoder_submit", CallingConvention = CallingConvention.Cdecl)]
 	public static extern unsafe void encoder_submit(Encoder* _this, ushort _id, ProgramHandle _program, uint _depth, byte _flags);
@@ -3746,7 +3753,7 @@ public static partial class bgfx
 	/// <param name="_program">Program.</param>
 	/// <param name="_occlusionQuery">Occlusion query.</param>
 	/// <param name="_depth">Depth for sorting.</param>
-	/// <param name="_flags">Which states to discard for next draw. See BGFX_DISCARD_</param>
+	/// <param name="_flags">Discard or preserve states. See `BGFX_DISCARD_*`.</param>
 	///
 	[DllImport(DllName, EntryPoint="bgfx_encoder_submit_occlusion_query", CallingConvention = CallingConvention.Cdecl)]
 	public static extern unsafe void encoder_submit_occlusion_query(Encoder* _this, ushort _id, ProgramHandle _program, OcclusionQueryHandle _occlusionQuery, uint _depth, byte _flags);
@@ -3762,7 +3769,7 @@ public static partial class bgfx
 	/// <param name="_start">First element in indirect buffer.</param>
 	/// <param name="_num">Number of dispatches.</param>
 	/// <param name="_depth">Depth for sorting.</param>
-	/// <param name="_flags">Which states to discard for next draw. See BGFX_DISCARD_</param>
+	/// <param name="_flags">Discard or preserve states. See `BGFX_DISCARD_*`.</param>
 	///
 	[DllImport(DllName, EntryPoint="bgfx_encoder_submit_indirect", CallingConvention = CallingConvention.Cdecl)]
 	public static extern unsafe void encoder_submit_indirect(Encoder* _this, ushort _id, ProgramHandle _program, IndirectBufferHandle _indirectHandle, ushort _start, ushort _num, uint _depth, byte _flags);
@@ -3844,9 +3851,10 @@ public static partial class bgfx
 	/// <param name="_numX">Number of groups X.</param>
 	/// <param name="_numY">Number of groups Y.</param>
 	/// <param name="_numZ">Number of groups Z.</param>
+	/// <param name="_flags">Discard or preserve states. See `BGFX_DISCARD_*`.</param>
 	///
 	[DllImport(DllName, EntryPoint="bgfx_encoder_dispatch", CallingConvention = CallingConvention.Cdecl)]
-	public static extern unsafe void encoder_dispatch(Encoder* _this, ushort _id, ProgramHandle _program, uint _numX, uint _numY, uint _numZ);
+	public static extern unsafe void encoder_dispatch(Encoder* _this, ushort _id, ProgramHandle _program, uint _numX, uint _numY, uint _numZ, byte _flags);
 	
 	/// <summary>
 	/// Dispatch compute indirect.
@@ -3857,15 +3865,16 @@ public static partial class bgfx
 	/// <param name="_indirectHandle">Indirect buffer.</param>
 	/// <param name="_start">First element in indirect buffer.</param>
 	/// <param name="_num">Number of dispatches.</param>
+	/// <param name="_flags">Discard or preserve states. See `BGFX_DISCARD_*`.</param>
 	///
 	[DllImport(DllName, EntryPoint="bgfx_encoder_dispatch_indirect", CallingConvention = CallingConvention.Cdecl)]
-	public static extern unsafe void encoder_dispatch_indirect(Encoder* _this, ushort _id, ProgramHandle _program, IndirectBufferHandle _indirectHandle, ushort _start, ushort _num);
+	public static extern unsafe void encoder_dispatch_indirect(Encoder* _this, ushort _id, ProgramHandle _program, IndirectBufferHandle _indirectHandle, ushort _start, ushort _num, byte _flags);
 	
 	/// <summary>
 	/// Discard previously set state for draw or compute call.
 	/// </summary>
 	///
-	/// <param name="_flags">Draw/compute states to discard.</param>
+	/// <param name="_flags">Discard or preserve states. See `BGFX_DISCARD_*`.</param>
 	///
 	[DllImport(DllName, EntryPoint="bgfx_encoder_discard", CallingConvention = CallingConvention.Cdecl)]
 	public static extern unsafe void encoder_discard(Encoder* _this, byte _flags);
@@ -4359,9 +4368,10 @@ public static partial class bgfx
 	/// <param name="_numX">Number of groups X.</param>
 	/// <param name="_numY">Number of groups Y.</param>
 	/// <param name="_numZ">Number of groups Z.</param>
+	/// <param name="_flags">Discard or preserve states. See `BGFX_DISCARD_*`.</param>
 	///
 	[DllImport(DllName, EntryPoint="bgfx_dispatch", CallingConvention = CallingConvention.Cdecl)]
-	public static extern unsafe void dispatch(ushort _id, ProgramHandle _program, uint _numX, uint _numY, uint _numZ);
+	public static extern unsafe void dispatch(ushort _id, ProgramHandle _program, uint _numX, uint _numY, uint _numZ, byte _flags);
 	
 	/// <summary>
 	/// Dispatch compute indirect.
@@ -4372,9 +4382,10 @@ public static partial class bgfx
 	/// <param name="_indirectHandle">Indirect buffer.</param>
 	/// <param name="_start">First element in indirect buffer.</param>
 	/// <param name="_num">Number of dispatches.</param>
+	/// <param name="_flags">Discard or preserve states. See `BGFX_DISCARD_*`.</param>
 	///
 	[DllImport(DllName, EntryPoint="bgfx_dispatch_indirect", CallingConvention = CallingConvention.Cdecl)]
-	public static extern unsafe void dispatch_indirect(ushort _id, ProgramHandle _program, IndirectBufferHandle _indirectHandle, ushort _start, ushort _num);
+	public static extern unsafe void dispatch_indirect(ushort _id, ProgramHandle _program, IndirectBufferHandle _indirectHandle, ushort _start, ushort _num, byte _flags);
 	
 	/// <summary>
 	/// Discard previously set state for draw or compute call.

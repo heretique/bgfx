@@ -1,7 +1,7 @@
 -- vim: syntax=lua
 -- bgfx interface
 
-version(104)
+version(105)
 
 typedef "bool"
 typedef "char"
@@ -201,14 +201,15 @@ flag.Clear { bits = 16 }
 
 --- Rendering state discard. When state is preserved in submit, rendering states can be discarded
 --- on a finer grain.
-flag.Discard { bits = 8, desc = "Discard flags" }
-	.None(0)                                                                            --- Discard nothing
-	.IndexBuffer                                                                        --- Discard only Index Buffer
-	.VertexStreams                                                                      --- Discard only Vertex Streams
-	.TextureSamplers                                                                    --- Discard only texture samplers
-	.Compute                                                                            --- Discard only Compute shader related state
-	.State                                                                              --- Discard only state
-	.All { "IndexBuffer", "VertexStreams", "TextureSamplers", "Compute", "State" }      --- Discard every rendering states
+flag.Discard { bits = 8, const, desc = "Discard flags" }
+	.None            (0x00) --- Preserve everything.
+	.Bindings        (0x01) --- Discard texture sampler and buffer bindings.
+	.IndexBuffer     (0x02) --- Discard index buffer.
+	.InstanceData    (0x04) --- Discard instance data.
+	.State           (0x08) --- Discard state.
+	.Transform       (0x10) --- Discard transform.
+	.VertexStreams   (0x20) --- Discard vertex streams.
+	.All             (0xff) --- Discard all states.
 	()
 
 flag.Debug { bits = 32 }
@@ -675,7 +676,7 @@ struct.GPU  { namespace = "Caps" }
 	.vendorId    "uint16_t"                --- Vendor PCI id. See `BGFX_PCI_ID_*`.
 	.deviceId    "uint16_t"                --- Device id.
 
---- Renderer capabilities limits.
+--- Renderer runtime limits.
 struct.Limits  { namespace = "Caps" }
 	.maxDrawCalls            "uint32_t"    --- Maximum number of draw calls.
 	.maxBlits                "uint32_t"    --- Maximum number of blit calls.
@@ -712,7 +713,7 @@ struct.Caps
 	.originBottomLeft "bool"           --- True when NDC origin is at bottom left.
 	.numGPUs      "uint8_t"            --- Number of enumerated GPUs.
 	.gpu          "GPU[4]"             --- Enumerated GPUs.
-	.limits       "Limits"
+	.limits       "Limits"             --- Renderer runtime limits.
 	.formats      "uint16_t[TextureFormat::Count]"
 		--- Supported texture format capabilities flags:
 		---   - `BGFX_CAPS_FORMAT_TEXTURE_NONE` - Texture format is not supported.
@@ -743,11 +744,14 @@ struct.InternalData
 
 --- Platform data.
 struct.PlatformData { ctor }
-	.ndt          "void*" --- Native display type.
-	.nwh          "void*" --- Native window handle.
-	.context      "void*" --- GL context, or D3D device.
-	.backBuffer   "void*" --- GL backbuffer, or D3D render target view.
-	.backBufferDS "void*" --- Backbuffer depth/stencil.
+	.ndt          "void*" --- Native display type (*nix specific).
+	.nwh          "void*" --- Native window handle. If `NULL` bgfx will create headless
+	                      --- context/device if renderer API supports it.
+	.context      "void*" --- GL context, or D3D device. If `NULL`, bgfx will create context/device.
+	.backBuffer   "void*" --- GL back-buffer, or D3D render target view. If `NULL` bgfx will
+	                      --- create back-buffer color surface.
+	.backBufferDS "void*" --- Backbuffer depth/stencil. If `NULL` bgfx will create back-buffer
+	                      --- depth/stencil surface.
 
 --- Backbuffer resolution and reset parameters.
 struct.Resolution { ctor }
@@ -758,6 +762,7 @@ struct.Resolution { ctor }
 	.numBackBuffers  "uint8_t"             --- Number of back buffers.
 	.maxFrameLatency "uint8_t"             --- Maximum frame latency.
 
+--- Configurable runtime limits parameters.
 struct.Limits { namespace = "Init" }
 	.maxEncoders    "uint16_t"             --- Maximum number of encoder threads.
 	.transientVbSize "uint32_t"            --- Maximum transient vertex buffer size.
@@ -784,7 +789,7 @@ struct.Init { ctor }
 	.profile        "bool"                 --- Enable device for profiling.
 	.platformData   "PlatformData"         --- Platform data.
 	.resolution     "Resolution"           --- Backbuffer resolution and reset parameters. See: `bgfx::Resolution`.
-	.limits         "Limits"
+	.limits         "Limits"               --- Configurable runtime limits parameters.
 	.callback       "CallbackI*"           --- Provide application specific callback interface.
 	                                       --- See: `bgfx::CallbackI`
 
@@ -2233,7 +2238,9 @@ func.Encoder.setVertexBuffer
 	.handle       "VertexBufferHandle" --- Vertex buffer.
 	.startVertex  "uint32_t"           --- First vertex to render.
 	.numVertices  "uint32_t"           --- Number of vertices to render.
-	.layoutHandle "VertexLayoutHandle" --- Vertex layout for aliasing vertex buffer.
+	.layoutHandle "VertexLayoutHandle" --- Vertex layout for aliasing vertex buffer. If invalid
+	                                   --- handle is used, vertex layout used for creation
+	                                   --- of vertex buffer will be used.
 	 { default = "BGFX_INVALID_HANDLE" }
 
 --- Set vertex buffer for draw primitive.
@@ -2249,7 +2256,9 @@ func.Encoder.setVertexBuffer { cname = "set_dynamic_vertex_buffer" }
 	.handle       "DynamicVertexBufferHandle" --- Dynamic vertex buffer.
 	.startVertex  "uint32_t"                  --- First vertex to render.
 	.numVertices  "uint32_t"                  --- Number of vertices to render.
-	.layoutHandle "VertexLayoutHandle"        --- Vertex layout for aliasing vertex buffer.
+	.layoutHandle "VertexLayoutHandle"        --- Vertex layout for aliasing vertex buffer. If invalid
+	                                          --- handle is used, vertex layout used for creation
+	                                          --- of vertex buffer will be used.
 	 { default = "BGFX_INVALID_HANDLE" }
 
 --- Set vertex buffer for draw primitive.
@@ -2265,7 +2274,9 @@ func.Encoder.setVertexBuffer { cname = "set_transient_vertex_buffer" }
 	.tvb          "const TransientVertexBuffer*" --- Transient vertex buffer.
 	.startVertex  "uint32_t"                     --- First vertex to render.
 	.numVertices  "uint32_t"                     --- Number of vertices to render.
-	.layoutHandle "VertexLayoutHandle"           --- Vertex layout for aliasing vertex buffer.
+	.layoutHandle "VertexLayoutHandle"           --- Vertex layout for aliasing vertex buffer. If invalid
+	                                             --- handle is used, vertex layout used for creation
+	                                             --- of vertex buffer will be used.
 	 { default = "BGFX_INVALID_HANDLE" }
 
 --- Set number of vertices for auto generated vertices use in conjuction
@@ -2336,7 +2347,9 @@ func.Encoder.setTexture
 	                          ---     sampling.
 
 --- Submit an empty primitive for rendering. Uniforms and draw state
---- will be applied but no geometry will be submitted.
+--- will be applied but no geometry will be submitted. Useful in cases
+--- when no other draw/compute primitive is submitted to view, but it's
+--- desired to execute clear view.
 ---
 --- @remark
 ---   These empty draw calls will sort before ordinary draw calls.
@@ -2352,7 +2365,7 @@ func.Encoder.submit
 	.program       "ProgramHandle" --- Program.
 	.depth         "uint32_t"      --- Depth for sorting.
 	 { default = 0 }
-	.flags         "uint8_t"       --- Which states to discard for next draw. See BGFX_DISCARD_
+	.flags         "uint8_t"       --- Discard or preserve states. See `BGFX_DISCARD_*`.
 	 { default = "BGFX_DISCARD_ALL" }
 
 --- Submit primitive with occlusion query for rendering.
@@ -2363,7 +2376,7 @@ func.Encoder.submit { cname = "submit_occlusion_query" }
 	.occlusionQuery "OcclusionQueryHandle" --- Occlusion query.
 	.depth          "uint32_t"             --- Depth for sorting.
 	 { default = 0 }
-	.flags          "uint8_t"              --- Which states to discard for next draw. See BGFX_DISCARD_
+	.flags          "uint8_t"              --- Discard or preserve states. See `BGFX_DISCARD_*`.
 	 { default = "BGFX_DISCARD_ALL" }
 
 --- Submit primitive for rendering with index and instance data info from
@@ -2379,7 +2392,7 @@ func.Encoder.submit { cname = "submit_indirect" }
 	 { default = 1 }
 	.depth          "uint32_t"             --- Depth for sorting.
 	 { default = 0 }
-	.flags          "uint8_t"              --- Which states to discard for next draw. See BGFX_DISCARD_
+	.flags          "uint8_t"              --- Discard or preserve states. See `BGFX_DISCARD_*`.
 	 { default = "BGFX_DISCARD_ALL" }
 
 --- Set compute index buffer.
@@ -2438,6 +2451,8 @@ func.Encoder.dispatch
 	 { default = 1 }
 	.numZ    "uint32_t"      --- Number of groups Z.
 	 { default = 1 }
+	.flags   "uint8_t"       --- Discard or preserve states. See `BGFX_DISCARD_*`.
+	 { default = "BGFX_DISCARD_ALL" }
 
 --- Dispatch compute indirect.
 func.Encoder.dispatch { cname = "dispatch_indirect" }
@@ -2449,11 +2464,13 @@ func.Encoder.dispatch { cname = "dispatch_indirect" }
 	 { default = 0 }
 	.num            "uint16_t"             --- Number of dispatches.
 	 { default = 1 }
+	.flags   "uint8_t"                     --- Discard or preserve states. See `BGFX_DISCARD_*`.
+	 { default = "BGFX_DISCARD_ALL" }
 
 --- Discard previously set state for draw or compute call.
 func.Encoder.discard
 	"void"
-	.flags   "uint8_t"     --- Draw/compute states to discard.
+	.flags   "uint8_t" --- Discard or preserve states. See `BGFX_DISCARD_*`.
 	 { default = "BGFX_DISCARD_ALL" }
 
 --- Blit 2D texture region between two 2D textures.
@@ -2950,6 +2967,8 @@ func.dispatch
 	 { default = 1 }
 	.numZ    "uint32_t"      --- Number of groups Z.
 	 { default = 1 }
+	.flags   "uint8_t"       --- Discard or preserve states. See `BGFX_DISCARD_*`.
+	 { default = "BGFX_DISCARD_ALL" }
 
 --- Dispatch compute indirect.
 func.dispatch { cname = "dispatch_indirect" }
@@ -2961,6 +2980,8 @@ func.dispatch { cname = "dispatch_indirect" }
 	 { default = 0 }
 	.num            "uint16_t"             --- Number of dispatches.
 	 { default = 1 }
+	.flags   "uint8_t"                     --- Discard or preserve states. See `BGFX_DISCARD_*`.
+	 { default = "BGFX_DISCARD_ALL" }
 
 --- Discard previously set state for draw or compute call.
 func.discard

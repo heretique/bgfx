@@ -373,6 +373,20 @@ Implementation of Clustered Shading and Physically Based Rendering with the bgfx
 
 ![cluster](https://raw.githubusercontent.com/pezcode/Cluster/master/images/sponza.jpg)
 
+## NIMBY Rails
+
+NIMBY Rails is a management and design sandbox game for railways you build in the real world.
+
+[NIMBY Rails](https://store.steampowered.com/app/1134710/NIMBY_Rails/)
+
+![NIMBY Rails](https://user-images.githubusercontent.com/28320/78472283-03d5e200-7727-11ea-8bd4-db8754f52dc3.jpg)
+
+## Minecraft
+
+https://www.minecraft.net/zh-hant/attribution/
+
+![home-hero-1200x600](https://user-images.githubusercontent.com/814772/79185288-57050000-7dcb-11ea-87b4-2126fcd1545b.jpg)
+
 
 [License (BSD 2-clause)](https://bkaradzic.github.io/bgfx/license.html)
 -----------------------------------------------------------------------

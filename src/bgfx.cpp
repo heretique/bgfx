@@ -11,6 +11,7 @@
 #include <bx/mutex.h>
 
 #include "topology.h"
+#include "version.h"
 
 #if BX_PLATFORM_OSX || BX_PLATFORM_IOS
 #	include <objc/message.h>
@@ -1211,14 +1212,14 @@ namespace bgfx
 
 		if (m_discard)
 		{
-			discard();
+			discard(_flags);
 			return;
 		}
 
 		if (0 == m_draw.m_numVertices
 		&&  0 == m_draw.m_numIndices)
 		{
-			discard();
+			discard(_flags);
 			++m_numDropped;
 			return;
 		}
@@ -1226,7 +1227,7 @@ namespace bgfx
 		const uint32_t renderItemIdx = bx::atomicFetchAndAddsat<uint32_t>(&m_frame->m_numRenderItems, 1, BGFX_CONFIG_MAX_DRAW_CALLS);
 		if (BGFX_CONFIG_MAX_DRAW_CALLS-1 <= renderItemIdx)
 		{
-			discard();
+			discard(_flags);
 			++m_numDropped;
 			return;
 		}
@@ -1299,7 +1300,7 @@ namespace bgfx
 		}
 	}
 
-	void EncoderImpl::dispatch(ViewId _id, ProgramHandle _handle, uint32_t _numX, uint32_t _numY, uint32_t _numZ)
+	void EncoderImpl::dispatch(ViewId _id, ProgramHandle _handle, uint32_t _numX, uint32_t _numY, uint32_t _numZ, uint8_t _flags)
 	{
 		if (BX_ENABLED(BGFX_CONFIG_DEBUG_UNIFORM) )
 		{
@@ -1308,14 +1309,14 @@ namespace bgfx
 
 		if (m_discard)
 		{
-			discard();
+			discard(_flags);
 			return;
 		}
 
 		const uint32_t renderItemIdx = bx::atomicFetchAndAddsat<uint32_t>(&m_frame->m_numRenderItems, 1, BGFX_CONFIG_MAX_DRAW_CALLS);
 		if (BGFX_CONFIG_MAX_DRAW_CALLS-1 <= renderItemIdx)
 		{
-			discard();
+			discard(_flags);
 			++m_numDropped;
 			return;
 		}
@@ -1346,8 +1347,8 @@ namespace bgfx
 		m_frame->m_renderItem[renderItemIdx].compute = m_compute;
 		m_frame->m_renderItemBind[renderItemIdx]     = m_bind;
 
-		m_compute.clear();
-		m_bind.clear();
+		m_compute.clear(_flags);
+		m_bind.clear(_flags);
 		m_uniformBegin = m_uniformEnd;
 	}
 
@@ -1964,11 +1965,12 @@ namespace bgfx
 		m_dynVertexBufferAllocator.compact();
 		m_dynIndexBufferAllocator.compact();
 
-		BX_CHECK(m_layoutHandle.getNumHandles() == m_vertexLayoutRef.m_layoutMap.getNumElements()
-				, "VertexLayoutRef mismatch, num handles %d, handles in hash map %d."
-				, m_layoutHandle.getNumHandles()
-				, m_vertexLayoutRef.m_layoutMap.getNumElements()
-				);
+		BX_CHECK(
+			  m_layoutHandle.getNumHandles() == m_vertexLayoutRef.m_vertexLayoutMap.getNumElements()
+			, "VertexLayoutRef mismatch, num handles %d, handles in hash map %d."
+			, m_layoutHandle.getNumHandles()
+			, m_vertexLayoutRef.m_vertexLayoutMap.getNumElements()
+			);
 
 		m_vertexLayoutRef.shutdown(m_layoutHandle);
 
@@ -3317,6 +3319,13 @@ namespace bgfx
 	{
 	}
 
+	Init::Limits::Limits()
+		: maxEncoders(BGFX_CONFIG_DEFAULT_MAX_ENCODERS)
+		, transientVbSize(BGFX_CONFIG_TRANSIENT_VERTEX_BUFFER_SIZE)
+		, transientIbSize(BGFX_CONFIG_TRANSIENT_INDEX_BUFFER_SIZE)
+	{
+	}
+
 	Init::Init()
 		: type(RendererType::Count)
 		, vendorId(BGFX_PCI_ID_NONE)
@@ -3326,9 +3335,6 @@ namespace bgfx
 		, callback(NULL)
 		, allocator(NULL)
 	{
-		limits.maxEncoders     = BGFX_CONFIG_DEFAULT_MAX_ENCODERS;
-		limits.transientVbSize = BGFX_CONFIG_TRANSIENT_VERTEX_BUFFER_SIZE;
-		limits.transientIbSize = BGFX_CONFIG_TRANSIENT_INDEX_BUFFER_SIZE;
 	}
 
 	void Attachment::init(TextureHandle _handle, Access::Enum _access, uint16_t _layer, uint16_t _mip, uint8_t _resolve)
@@ -3430,6 +3436,13 @@ namespace bgfx
 
 		BX_TRACE("Init...");
 
+		// bgfx 1.104.7082
+		//      ^ ^^^ ^^^^
+		//      | |   +--- Commit number  (https://github.com/bkaradzic/bgfx / git rev-list --count HEAD)
+		//      | +------- API version    (from https://github.com/bkaradzic/bgfx/blob/master/scripts/bgfx.idl#L4)
+		//      +--------- Major revision (always 1)
+		BX_TRACE("Version 1.%d.%d (commit: " BGFX_REV_SHA1 ")", BGFX_API_VERSION, BGFX_REV_NUMBER);
+
 		errorState = ErrorState::ContextAllocated;
 
 		s_ctx = BX_ALIGNED_NEW(g_allocator, Context, Context::kAlignment);
@@ -3439,7 +3452,6 @@ namespace bgfx
 			return true;
 		}
 
-//error:
 		BX_TRACE("Init failed.");
 
 		switch (errorState)
@@ -3802,25 +3814,25 @@ namespace bgfx
 		BGFX_ENCODER(setImage(_stage, _handle, _mip, _access, _format) );
 	}
 
-	void Encoder::dispatch(ViewId _id, ProgramHandle _program, uint32_t _numX, uint32_t _numY, uint32_t _numZ)
+	void Encoder::dispatch(ViewId _id, ProgramHandle _program, uint32_t _numX, uint32_t _numY, uint32_t _numZ, uint8_t _flags)
 	{
 		BGFX_CHECK_CAPS(BGFX_CAPS_COMPUTE, "Compute is not supported!");
 		BGFX_CHECK_HANDLE_INVALID_OK("dispatch", s_ctx->m_programHandle, _program);
-		BGFX_ENCODER(dispatch(_id, _program, _numX, _numY, _numZ) );
+		BGFX_ENCODER(dispatch(_id, _program, _numX, _numY, _numZ, _flags) );
 	}
 
-	void Encoder::dispatch(ViewId _id, ProgramHandle _program, IndirectBufferHandle _indirectHandle, uint16_t _start, uint16_t _num)
+	void Encoder::dispatch(ViewId _id, ProgramHandle _program, IndirectBufferHandle _indirectHandle, uint16_t _start, uint16_t _num, uint8_t _flags)
 	{
 		BGFX_CHECK_CAPS(BGFX_CAPS_DRAW_INDIRECT, "Dispatch indirect is not supported!");
 		BGFX_CHECK_CAPS(BGFX_CAPS_COMPUTE, "Compute is not supported!");
 		BGFX_CHECK_HANDLE_INVALID_OK("dispatch", s_ctx->m_programHandle, _program);
 		BGFX_CHECK_HANDLE("dispatch", s_ctx->m_vertexBufferHandle, _indirectHandle);
-		BGFX_ENCODER(dispatch(_id, _program, _indirectHandle, _start, _num) );
+		BGFX_ENCODER(dispatch(_id, _program, _indirectHandle, _start, _num, _flags) );
 	}
 
-	void Encoder::discard(uint8_t flags)
+	void Encoder::discard(uint8_t _flags)
 	{
-		BGFX_ENCODER(discard(flags) );
+		BGFX_ENCODER(discard(_flags) );
 	}
 
 	void Encoder::blit(ViewId _id, TextureHandle _dst, uint16_t _dstX, uint16_t _dstY, TextureHandle _src, uint16_t _srcX, uint16_t _srcY, uint16_t _width, uint16_t _height)
@@ -4111,7 +4123,7 @@ namespace bgfx
 	void allocInstanceDataBuffer(InstanceDataBuffer* _idb, uint32_t _num, uint16_t _stride)
 	{
 		BGFX_CHECK_CAPS(BGFX_CAPS_INSTANCING, "Instancing is not supported!");
-		BX_CHECK(_stride == BX_ALIGN_16(_stride), "Stride must be multiple of 16.");
+		BX_CHECK(bx::isAligned(_stride, 16), "Stride must be multiple of 16.");
 		BX_CHECK(0 < _num, "Requesting 0 instanced data vertices.");
 		s_ctx->allocInstanceDataBuffer(_idb, _num, _stride);
 		BX_CHECK(_num == _idb->size / _stride
@@ -5018,22 +5030,22 @@ namespace bgfx
 		s_ctx->m_encoder0->setImage(_stage, _handle, _mip, _access, _format);
 	}
 
-	void dispatch(ViewId _id, ProgramHandle _handle, uint32_t _numX, uint32_t _numY, uint32_t _numZ)
+	void dispatch(ViewId _id, ProgramHandle _handle, uint32_t _numX, uint32_t _numY, uint32_t _numZ, uint8_t _flags)
 	{
 		BGFX_CHECK_API_THREAD();
-		s_ctx->m_encoder0->dispatch(_id, _handle, _numX, _numY, _numZ);
+		s_ctx->m_encoder0->dispatch(_id, _handle, _numX, _numY, _numZ, _flags);
 	}
 
-	void dispatch(ViewId _id, ProgramHandle _handle, IndirectBufferHandle _indirectHandle, uint16_t _start, uint16_t _num)
+	void dispatch(ViewId _id, ProgramHandle _handle, IndirectBufferHandle _indirectHandle, uint16_t _start, uint16_t _num, uint8_t _flags)
 	{
 		BGFX_CHECK_API_THREAD();
-		s_ctx->m_encoder0->dispatch(_id, _handle, _indirectHandle, _start, _num);
+		s_ctx->m_encoder0->dispatch(_id, _handle, _indirectHandle, _start, _num, _flags);
 	}
 
-	void discard(uint8_t flags)
+	void discard(uint8_t _flags)
 	{
 		BGFX_CHECK_API_THREAD();
-		s_ctx->m_encoder0->discard(flags);
+		s_ctx->m_encoder0->discard(_flags);
 	}
 
 	void blit(ViewId _id, TextureHandle _dst, uint16_t _dstX, uint16_t _dstY, TextureHandle _src, uint16_t _srcX, uint16_t _srcY, uint16_t _width, uint16_t _height)

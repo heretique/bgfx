@@ -487,7 +487,7 @@ typedef struct bgfx_caps_gpu_s
 } bgfx_caps_gpu_t;
 
 /**
- * Renderer capabilities limits.
+ * Renderer runtime limits.
  *
  */
 typedef struct bgfx_caps_limits_s
@@ -537,7 +537,7 @@ typedef struct bgfx_caps_s
     bool                 originBottomLeft;   /** True when NDC origin is at bottom left.  */
     uint8_t              numGPUs;            /** Number of enumerated GPUs.               */
     bgfx_caps_gpu_t      gpu[4];             /** Enumerated GPUs.                         */
-    bgfx_caps_limits_t   limits;
+    bgfx_caps_limits_t   limits;             /** Renderer runtime limits.                 */
     
     /**
      * Supported texture format capabilities flags:
@@ -583,11 +583,26 @@ typedef struct bgfx_internal_data_s
  */
 typedef struct bgfx_platform_data_s
 {
-    void*                ndt;                /** Native display type.                     */
-    void*                nwh;                /** Native window handle.                    */
-    void*                context;            /** GL context, or D3D device.               */
-    void*                backBuffer;         /** GL backbuffer, or D3D render target view. */
-    void*                backBufferDS;       /** Backbuffer depth/stencil.                */
+    void*                ndt;                /** Native display type (*nix specific).     */
+    
+    /**
+     * Native window handle. If `NULL` bgfx will create headless
+     * context/device if renderer API supports it.
+     */
+    void*                nwh;
+    void*                context;            /** GL context, or D3D device. If `NULL`, bgfx will create context/device. */
+    
+    /**
+     * GL back-buffer, or D3D render target view. If `NULL` bgfx will
+     * create back-buffer color surface.
+     */
+    void*                backBuffer;
+    
+    /**
+     * Backbuffer depth/stencil. If `NULL` bgfx will create back-buffer
+     * depth/stencil surface.
+     */
+    void*                backBufferDS;
 
 } bgfx_platform_data_t;
 
@@ -606,6 +621,10 @@ typedef struct bgfx_resolution_s
 
 } bgfx_resolution_t;
 
+/**
+ * Configurable runtime limits parameters.
+ *
+ */
 typedef struct bgfx_init_limits_s
 {
     uint16_t             maxEncoders;        /** Maximum number of encoder threads.       */
@@ -648,7 +667,7 @@ typedef struct bgfx_init_s
     bool                 profile;            /** Enable device for profiling.             */
     bgfx_platform_data_t platformData;       /** Platform data.                           */
     bgfx_resolution_t    resolution;         /** Backbuffer resolution and reset parameters. See: `bgfx::Resolution`. */
-    bgfx_init_limits_t   limits;
+    bgfx_init_limits_t   limits;             /** Configurable runtime limits parameters.  */
     
     /**
      * Provide application specific callback interface.
@@ -2438,7 +2457,9 @@ BGFX_C_API void bgfx_encoder_set_transient_index_buffer(bgfx_encoder_t* _this, c
  * @param[in] _handle Vertex buffer.
  * @param[in] _startVertex First vertex to render.
  * @param[in] _numVertices Number of vertices to render.
- * @param[in] _layoutHandle Vertex layout for aliasing vertex buffer.
+ * @param[in] _layoutHandle Vertex layout for aliasing vertex buffer. If invalid
+ *  handle is used, vertex layout used for creation
+ *  of vertex buffer will be used.
  *
  */
 BGFX_C_API void bgfx_encoder_set_vertex_buffer(bgfx_encoder_t* _this, uint8_t _stream, bgfx_vertex_buffer_handle_t _handle, uint32_t _startVertex, uint32_t _numVertices, bgfx_vertex_layout_handle_t _layoutHandle);
@@ -2450,7 +2471,9 @@ BGFX_C_API void bgfx_encoder_set_vertex_buffer(bgfx_encoder_t* _this, uint8_t _s
  * @param[in] _handle Dynamic vertex buffer.
  * @param[in] _startVertex First vertex to render.
  * @param[in] _numVertices Number of vertices to render.
- * @param[in] _layoutHandle Vertex layout for aliasing vertex buffer.
+ * @param[in] _layoutHandle Vertex layout for aliasing vertex buffer. If invalid
+ *  handle is used, vertex layout used for creation
+ *  of vertex buffer will be used.
  *
  */
 BGFX_C_API void bgfx_encoder_set_dynamic_vertex_buffer(bgfx_encoder_t* _this, uint8_t _stream, bgfx_dynamic_vertex_buffer_handle_t _handle, uint32_t _startVertex, uint32_t _numVertices, bgfx_vertex_layout_handle_t _layoutHandle);
@@ -2462,7 +2485,9 @@ BGFX_C_API void bgfx_encoder_set_dynamic_vertex_buffer(bgfx_encoder_t* _this, ui
  * @param[in] _tvb Transient vertex buffer.
  * @param[in] _startVertex First vertex to render.
  * @param[in] _numVertices Number of vertices to render.
- * @param[in] _layoutHandle Vertex layout for aliasing vertex buffer.
+ * @param[in] _layoutHandle Vertex layout for aliasing vertex buffer. If invalid
+ *  handle is used, vertex layout used for creation
+ *  of vertex buffer will be used.
  *
  */
 BGFX_C_API void bgfx_encoder_set_transient_vertex_buffer(bgfx_encoder_t* _this, uint8_t _stream, const bgfx_transient_vertex_buffer_t* _tvb, uint32_t _startVertex, uint32_t _numVertices, bgfx_vertex_layout_handle_t _layoutHandle);
@@ -2536,7 +2561,9 @@ BGFX_C_API void bgfx_encoder_set_texture(bgfx_encoder_t* _this, uint8_t _stage, 
 
 /**
  * Submit an empty primitive for rendering. Uniforms and draw state
- * will be applied but no geometry will be submitted.
+ * will be applied but no geometry will be submitted. Useful in cases
+ * when no other draw/compute primitive is submitted to view, but it's
+ * desired to execute clear view.
  * @remark
  *   These empty draw calls will sort before ordinary draw calls.
  *
@@ -2551,7 +2578,7 @@ BGFX_C_API void bgfx_encoder_touch(bgfx_encoder_t* _this, bgfx_view_id_t _id);
  * @param[in] _id View id.
  * @param[in] _program Program.
  * @param[in] _depth Depth for sorting.
- * @param[in] _flags Which states to discard for next draw. See BGFX_DISCARD_
+ * @param[in] _flags Discard or preserve states. See `BGFX_DISCARD_*`.
  *
  */
 BGFX_C_API void bgfx_encoder_submit(bgfx_encoder_t* _this, bgfx_view_id_t _id, bgfx_program_handle_t _program, uint32_t _depth, uint8_t _flags);
@@ -2563,7 +2590,7 @@ BGFX_C_API void bgfx_encoder_submit(bgfx_encoder_t* _this, bgfx_view_id_t _id, b
  * @param[in] _program Program.
  * @param[in] _occlusionQuery Occlusion query.
  * @param[in] _depth Depth for sorting.
- * @param[in] _flags Which states to discard for next draw. See BGFX_DISCARD_
+ * @param[in] _flags Discard or preserve states. See `BGFX_DISCARD_*`.
  *
  */
 BGFX_C_API void bgfx_encoder_submit_occlusion_query(bgfx_encoder_t* _this, bgfx_view_id_t _id, bgfx_program_handle_t _program, bgfx_occlusion_query_handle_t _occlusionQuery, uint32_t _depth, uint8_t _flags);
@@ -2578,7 +2605,7 @@ BGFX_C_API void bgfx_encoder_submit_occlusion_query(bgfx_encoder_t* _this, bgfx_
  * @param[in] _start First element in indirect buffer.
  * @param[in] _num Number of dispatches.
  * @param[in] _depth Depth for sorting.
- * @param[in] _flags Which states to discard for next draw. See BGFX_DISCARD_
+ * @param[in] _flags Discard or preserve states. See `BGFX_DISCARD_*`.
  *
  */
 BGFX_C_API void bgfx_encoder_submit_indirect(bgfx_encoder_t* _this, bgfx_view_id_t _id, bgfx_program_handle_t _program, bgfx_indirect_buffer_handle_t _indirectHandle, uint16_t _start, uint16_t _num, uint32_t _depth, uint8_t _flags);
@@ -2653,9 +2680,10 @@ BGFX_C_API void bgfx_encoder_set_image(bgfx_encoder_t* _this, uint8_t _stage, bg
  * @param[in] _numX Number of groups X.
  * @param[in] _numY Number of groups Y.
  * @param[in] _numZ Number of groups Z.
+ * @param[in] _flags Discard or preserve states. See `BGFX_DISCARD_*`.
  *
  */
-BGFX_C_API void bgfx_encoder_dispatch(bgfx_encoder_t* _this, bgfx_view_id_t _id, bgfx_program_handle_t _program, uint32_t _numX, uint32_t _numY, uint32_t _numZ);
+BGFX_C_API void bgfx_encoder_dispatch(bgfx_encoder_t* _this, bgfx_view_id_t _id, bgfx_program_handle_t _program, uint32_t _numX, uint32_t _numY, uint32_t _numZ, uint8_t _flags);
 
 /**
  * Dispatch compute indirect.
@@ -2665,14 +2693,15 @@ BGFX_C_API void bgfx_encoder_dispatch(bgfx_encoder_t* _this, bgfx_view_id_t _id,
  * @param[in] _indirectHandle Indirect buffer.
  * @param[in] _start First element in indirect buffer.
  * @param[in] _num Number of dispatches.
+ * @param[in] _flags Discard or preserve states. See `BGFX_DISCARD_*`.
  *
  */
-BGFX_C_API void bgfx_encoder_dispatch_indirect(bgfx_encoder_t* _this, bgfx_view_id_t _id, bgfx_program_handle_t _program, bgfx_indirect_buffer_handle_t _indirectHandle, uint16_t _start, uint16_t _num);
+BGFX_C_API void bgfx_encoder_dispatch_indirect(bgfx_encoder_t* _this, bgfx_view_id_t _id, bgfx_program_handle_t _program, bgfx_indirect_buffer_handle_t _indirectHandle, uint16_t _start, uint16_t _num, uint8_t _flags);
 
 /**
  * Discard previously set state for draw or compute call.
  *
- * @param[in] _flags Draw/compute states to discard.
+ * @param[in] _flags Discard or preserve states. See `BGFX_DISCARD_*`.
  *
  */
 BGFX_C_API void bgfx_encoder_discard(bgfx_encoder_t* _this, uint8_t _flags);
@@ -3171,9 +3200,10 @@ BGFX_C_API void bgfx_set_image(uint8_t _stage, bgfx_texture_handle_t _handle, ui
  * @param[in] _numX Number of groups X.
  * @param[in] _numY Number of groups Y.
  * @param[in] _numZ Number of groups Z.
+ * @param[in] _flags Discard or preserve states. See `BGFX_DISCARD_*`.
  *
  */
-BGFX_C_API void bgfx_dispatch(bgfx_view_id_t _id, bgfx_program_handle_t _program, uint32_t _numX, uint32_t _numY, uint32_t _numZ);
+BGFX_C_API void bgfx_dispatch(bgfx_view_id_t _id, bgfx_program_handle_t _program, uint32_t _numX, uint32_t _numY, uint32_t _numZ, uint8_t _flags);
 
 /**
  * Dispatch compute indirect.
@@ -3183,9 +3213,10 @@ BGFX_C_API void bgfx_dispatch(bgfx_view_id_t _id, bgfx_program_handle_t _program
  * @param[in] _indirectHandle Indirect buffer.
  * @param[in] _start First element in indirect buffer.
  * @param[in] _num Number of dispatches.
+ * @param[in] _flags Discard or preserve states. See `BGFX_DISCARD_*`.
  *
  */
-BGFX_C_API void bgfx_dispatch_indirect(bgfx_view_id_t _id, bgfx_program_handle_t _program, bgfx_indirect_buffer_handle_t _indirectHandle, uint16_t _start, uint16_t _num);
+BGFX_C_API void bgfx_dispatch_indirect(bgfx_view_id_t _id, bgfx_program_handle_t _program, bgfx_indirect_buffer_handle_t _indirectHandle, uint16_t _start, uint16_t _num, uint8_t _flags);
 
 /**
  * Discard previously set state for draw or compute call.
@@ -3556,8 +3587,8 @@ struct bgfx_interface_vtbl
     void (*encoder_set_compute_dynamic_vertex_buffer)(bgfx_encoder_t* _this, uint8_t _stage, bgfx_dynamic_vertex_buffer_handle_t _handle, bgfx_access_t _access);
     void (*encoder_set_compute_indirect_buffer)(bgfx_encoder_t* _this, uint8_t _stage, bgfx_indirect_buffer_handle_t _handle, bgfx_access_t _access);
     void (*encoder_set_image)(bgfx_encoder_t* _this, uint8_t _stage, bgfx_texture_handle_t _handle, uint8_t _mip, bgfx_access_t _access, bgfx_texture_format_t _format);
-    void (*encoder_dispatch)(bgfx_encoder_t* _this, bgfx_view_id_t _id, bgfx_program_handle_t _program, uint32_t _numX, uint32_t _numY, uint32_t _numZ);
-    void (*encoder_dispatch_indirect)(bgfx_encoder_t* _this, bgfx_view_id_t _id, bgfx_program_handle_t _program, bgfx_indirect_buffer_handle_t _indirectHandle, uint16_t _start, uint16_t _num);
+    void (*encoder_dispatch)(bgfx_encoder_t* _this, bgfx_view_id_t _id, bgfx_program_handle_t _program, uint32_t _numX, uint32_t _numY, uint32_t _numZ, uint8_t _flags);
+    void (*encoder_dispatch_indirect)(bgfx_encoder_t* _this, bgfx_view_id_t _id, bgfx_program_handle_t _program, bgfx_indirect_buffer_handle_t _indirectHandle, uint16_t _start, uint16_t _num, uint8_t _flags);
     void (*encoder_discard)(bgfx_encoder_t* _this, uint8_t _flags);
     void (*encoder_blit)(bgfx_encoder_t* _this, bgfx_view_id_t _id, bgfx_texture_handle_t _dst, uint8_t _dstMip, uint16_t _dstX, uint16_t _dstY, uint16_t _dstZ, bgfx_texture_handle_t _src, uint8_t _srcMip, uint16_t _srcX, uint16_t _srcY, uint16_t _srcZ, uint16_t _width, uint16_t _height, uint16_t _depth);
     void (*request_screen_shot)(bgfx_frame_buffer_handle_t _handle, const char* _filePath);
@@ -3598,8 +3629,8 @@ struct bgfx_interface_vtbl
     void (*set_compute_dynamic_vertex_buffer)(uint8_t _stage, bgfx_dynamic_vertex_buffer_handle_t _handle, bgfx_access_t _access);
     void (*set_compute_indirect_buffer)(uint8_t _stage, bgfx_indirect_buffer_handle_t _handle, bgfx_access_t _access);
     void (*set_image)(uint8_t _stage, bgfx_texture_handle_t _handle, uint8_t _mip, bgfx_access_t _access, bgfx_texture_format_t _format);
-    void (*dispatch)(bgfx_view_id_t _id, bgfx_program_handle_t _program, uint32_t _numX, uint32_t _numY, uint32_t _numZ);
-    void (*dispatch_indirect)(bgfx_view_id_t _id, bgfx_program_handle_t _program, bgfx_indirect_buffer_handle_t _indirectHandle, uint16_t _start, uint16_t _num);
+    void (*dispatch)(bgfx_view_id_t _id, bgfx_program_handle_t _program, uint32_t _numX, uint32_t _numY, uint32_t _numZ, uint8_t _flags);
+    void (*dispatch_indirect)(bgfx_view_id_t _id, bgfx_program_handle_t _program, bgfx_indirect_buffer_handle_t _indirectHandle, uint16_t _start, uint16_t _num, uint8_t _flags);
     void (*discard)(uint8_t _flags);
     void (*blit)(bgfx_view_id_t _id, bgfx_texture_handle_t _dst, uint8_t _dstMip, uint16_t _dstX, uint16_t _dstY, uint16_t _dstZ, bgfx_texture_handle_t _src, uint8_t _srcMip, uint16_t _srcX, uint16_t _srcY, uint16_t _srcZ, uint16_t _width, uint16_t _height, uint16_t _depth);
 };
