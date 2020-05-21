@@ -79,9 +79,7 @@ function bgfxProjectBase(_kind, _defines)
 		path.join(BIMG_DIR, "include"),
 	}
 
-	defines {
-		_defines,
-	}
+	defines (_defines)
 
 	links {
 		"bx",
@@ -163,21 +161,20 @@ function bgfxProjectBase(_kind, _defines)
 		path.join(BGFX_DIR, "src/renderer_nvn.h"),
 	})
 
-	if _OPTIONS["webgpu"] then
+	if _OPTIONS["with-webgpu"] then
 		defines {
 			"BGFX_CONFIG_RENDERER_WEBGPU=1",
 		}
 
-		configuration { "asmjs" }
+		local generator = "out/VS2019"
+
+		configuration { "wasm*" }
 			defines {
 				"BGFX_CONFIG_RENDERER_OPENGL=0",
 				"BGFX_CONFIG_RENDERER_OPENGLES=0",
 			}
 
-		configuration { "not asmjs" }
-			--local generator = "out/Default"
-			local generator = "out/VS2019"
-
+		configuration { "not wasm*" }
 			includedirs {
 				path.join(DAWN_DIR, "src"),
 				path.join(DAWN_DIR, "src/include"),
@@ -186,16 +183,16 @@ function bgfxProjectBase(_kind, _defines)
 				path.join(DAWN_DIR, generator, "gen/src/include"),
 			}
 
-			configuration { "vs*" }
-				defines {
-					"NTDDI_VERSION=NTDDI_WIN10_RS2",
+		configuration { "vs*" }
+			defines {
+				"NTDDI_VERSION=NTDDI_WIN10_RS2",
 
-					-- We can't say `=_WIN32_WINNT_WIN10` here because some files do
-					-- `#if WINVER < 0x0600` without including windows.h before,
-					-- and then _WIN32_WINNT_WIN10 isn't yet known to be 0x0A00.
-					"_WIN32_WINNT=0x0A00",
-					"WINVER=0x0A00",
-				}
+				-- We can't say `=_WIN32_WINNT_WIN10` here because some files do
+				-- `#if WINVER < 0x0600` without including windows.h before,
+				-- and then _WIN32_WINNT_WIN10 isn't yet known to be 0x0A00.
+				"_WIN32_WINNT=0x0A00",
+				"WINVER=0x0A00",
+			}
 
 		configuration {}
     end
@@ -272,14 +269,14 @@ function bgfxProject(_name, _kind, _defines)
 		copyLib()
 end
 
-if _OPTIONS["webgpu"] then
+if _OPTIONS["with-webgpu"] then
 	function usesWebGPU()
-		configuration { "asmjs" }
+		configuration { "wasm*" }
 			linkoptions {
 				"-s USE_WEBGPU=1",
 			}
 
-		configuration { "not asmjs" }
+		configuration { "not wasm*" }
 			--local generator = "out/Default"
 			local generator = "out/VS2019"
 
