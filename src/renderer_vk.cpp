@@ -252,7 +252,6 @@ VK_IMPORT_DEVICE
 		{
 			VK_LAYER_LUNARG_standard_validation,
 			VK_LAYER_LUNARG_vktrace,
-			VK_LAYER_RENDERDOC_Capture,
 			VK_LAYER_KHRONOS_validation,
 
 			Count
@@ -271,7 +270,6 @@ VK_IMPORT_DEVICE
 	{
 		{ "VK_LAYER_LUNARG_standard_validation",  1, { false, BGFX_CONFIG_DEBUG }, { false, false             } },
 		{ "VK_LAYER_LUNARG_vktrace",              1, { false, false             }, { false, false             } },
-		{ "VK_LAYER_RENDERDOC_Capture",           1, { false, BGFX_CONFIG_DEBUG }, { false, false             } },
 		{ "VK_LAYER_KHRONOS_validation",          1, { false, BGFX_CONFIG_DEBUG }, { false, BGFX_CONFIG_DEBUG } },
 	};
 	BX_STATIC_ASSERT(Layer::Count == BX_COUNTOF(s_layer) );
@@ -1538,15 +1536,18 @@ VK_IMPORT_INSTANCE
 					| BGFX_CAPS_FRAGMENT_DEPTH
 					| BGFX_CAPS_INDEX32
 					| BGFX_CAPS_INSTANCING
+					| BGFX_CAPS_TEXTURE_2D_ARRAY
 					| BGFX_CAPS_TEXTURE_3D
 					| BGFX_CAPS_TEXTURE_BLIT
 					| BGFX_CAPS_TEXTURE_COMPARE_ALL
+					| BGFX_CAPS_TEXTURE_CUBE_ARRAY
 					| BGFX_CAPS_VERTEX_ATTRIB_HALF
 					| BGFX_CAPS_VERTEX_ATTRIB_UINT10
 					| BGFX_CAPS_VERTEX_ID
 					);
 
 				g_caps.limits.maxTextureSize     = m_deviceProperties.limits.maxImageDimension2D;
+				g_caps.limits.maxTextureLayers   = m_deviceProperties.limits.maxImageArrayLayers;
 				g_caps.limits.maxFBAttachments   = bx::min(uint8_t(m_deviceProperties.limits.maxFragmentOutputAttachments), uint8_t(BGFX_CONFIG_MAX_FRAME_BUFFER_ATTACHMENTS) );
 				g_caps.limits.maxComputeBindings = BGFX_MAX_COMPUTE_BINDINGS;
 				g_caps.limits.maxVertexStreams   = BGFX_CONFIG_MAX_VERTEX_STREAMS;
@@ -2346,7 +2347,6 @@ VK_IMPORT_DEVICE
 				break;
 			};
 
-			BX_CHECK(false, "Failed to initialize Vulkan.");
 			return false;
 		}
 
@@ -2698,10 +2698,10 @@ VK_IMPORT_DEVICE
 			setFrameBuffer(BGFX_INVALID_HANDLE, false);
 
 			VkViewport vp;
-			vp.x        = 0;
-			vp.y        = (float)height;
-			vp.width    = (float)width;
-			vp.height   = -(float)height;
+			vp.x        = 0.0f;
+			vp.y        =  float(height);
+			vp.width    =  float(width);
+			vp.height   = -float(height);
 			vp.minDepth = 0.0f;
 			vp.maxDepth = 1.0f;
 			vkCmdSetViewport(m_commandBuffer, 0, 1, &vp);
@@ -4835,13 +4835,10 @@ VK_DESTROY
 				else if (UniformType::End == (~BGFX_UNIFORM_MASK & type))
 				{
 					// regCount is used for descriptor type
-					bool buffer = regCount == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+					const bool  isBuffer = regCount == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+					const uint16_t stage = regIndex - (isBuffer ? 16 : 32) - (fragment ? 48 : 0);  // regIndex is used for buffer binding index
 
-					const uint8_t stage = regIndex - (buffer ? 16 : 32) - (fragment ? 48 : 0);  // regIndex is used for buffer binding index
-
-					m_bindInfo[stage].type = buffer
-						? BindType::Buffer
-						: BindType::Image;
+					m_bindInfo[stage].type = isBuffer ? BindType::Buffer : BindType::Image;
 					m_bindInfo[stage].uniformHandle  = { 0 };
 					m_bindInfo[stage].binding        = regIndex;
 
@@ -4849,7 +4846,7 @@ VK_DESTROY
 				}
 				else if (UniformType::Sampler == (~BGFX_UNIFORM_MASK & type) )
 				{
-					const uint8_t stage = regIndex - 16 - (fragment ? 48 : 0); // regIndex is used for image/sampler binding index
+					const uint16_t stage = regIndex - 16 - (fragment ? 48 : 0); // regIndex is used for image/sampler binding index
 
 					const UniformRegInfo* info = s_renderVK->m_uniformReg.find(name);
 					BX_CHECK(NULL != info, "User defined uniform '%s' is not found, it won't be set.", name);
@@ -6065,10 +6062,10 @@ VK_DESTROY
 						beginRenderPass = true;
 
 						VkViewport vp;
-						vp.x        = rect.m_x;
-						vp.y        = rect.m_y + rect.m_height;
-						vp.width    = rect.m_width;
-						vp.height   = -(float)rect.m_height;
+						vp.x        =  float(rect.m_x);
+						vp.y        =  float(rect.m_y + rect.m_height);
+						vp.width    =  float(rect.m_width);
+						vp.height   = -float(rect.m_height);
 						vp.minDepth = 0.0f;
 						vp.maxDepth = 1.0f;
 						vkCmdSetViewport(m_commandBuffer, 0, 1, &vp);

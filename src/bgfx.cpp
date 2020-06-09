@@ -323,7 +323,13 @@ namespace bgfx
 		// BK - CallbackStub will be deleted after printing this info, so there is always one
 		// leak if CallbackStub is used.
 		BX_WARN(uint32_t(NULL != s_callbackStub ? 1 : 0) == m_numBlocks
-			, "MEMORY LEAK: %d (max: %d)"
+			, "\n\n"
+			  "\n########################################################"
+			  "\n"
+			  "\nMEMORY LEAK: Number of leaked blocks %d (Max blocks: %d)"
+			  "\n"
+			  "\n########################################################"
+			  "\n\n"
 			, m_numBlocks
 			, m_maxBlocks
 			);
@@ -1579,22 +1585,22 @@ namespace bgfx
 		BX_TRACE("\t C Program  %016" PRIx64, kSortKeyComputeProgramMask);
 
 		BX_TRACE("");
-		BX_TRACE("Supported capabilities (renderer %s, vendor 0x%04x, device 0x%04x):"
+		BX_TRACE("Capabilities (renderer %s, vendor 0x%04x, device 0x%04x):"
 				, s_ctx->m_renderCtx->getRendererName()
 				, g_caps.vendorId
 				, g_caps.deviceId
 				);
 		for (uint32_t ii = 0; ii < BX_COUNTOF(s_capsFlags); ++ii)
 		{
-			if (0 != (g_caps.supported & s_capsFlags[ii].m_flag) )
-			{
-				BX_TRACE("\t%s", s_capsFlags[ii].m_str);
-			}
+			BX_TRACE("\t[%c] %s"
+				, 0 != (g_caps.supported & s_capsFlags[ii].m_flag) ? 'x' : ' '
+				, s_capsFlags[ii].m_str
+				);
 		}
 
 		BX_TRACE("");
 		BX_TRACE("Limits:");
-#define LIMITS(_x) BX_TRACE("\t%-24s %d", #_x, g_caps.limits._x)
+#define LIMITS(_x) BX_TRACE("\t%-24s%10d", #_x, g_caps.limits._x)
 		LIMITS(maxDrawCalls);
 		LIMITS(maxBlits);
 		LIMITS(maxTextureSize);
@@ -1616,6 +1622,7 @@ namespace bgfx
 		LIMITS(maxUniforms);
 		LIMITS(maxOcclusionQueries);
 		LIMITS(maxEncoders);
+		LIMITS(minResourceCbSize);
 		LIMITS(transientVbSize);
 		LIMITS(transientIbSize);
 #undef LIMITS
@@ -1807,10 +1814,10 @@ namespace bgfx
 		m_debug   = BGFX_DEBUG_NONE;
 		m_frameTimeLast = bx::getHPCounter();
 
-		m_submit->create();
+		m_submit->create(_init.limits.minResourceCbSize);
 
 #if BGFX_CONFIG_MULTITHREADED
-		m_render->create();
+		m_render->create(_init.limits.minResourceCbSize);
 
 		if (s_renderFrameCalled)
 		{
@@ -3265,6 +3272,11 @@ namespace bgfx
 		flushTextureUpdateBatch(_cmdbuf);
 	}
 
+	uint32_t weldVertices(void* _output, const VertexLayout& _layout, const void* _data, uint32_t _num, bool _index32, float _epsilon)
+	{
+		return weldVertices(_output, _layout, _data, _num, _index32, _epsilon, g_allocator);
+	}
+
 	uint32_t topologyConvert(TopologyConvert::Enum _conversion, void* _dst, uint32_t _dstSize, const void* _indices, uint32_t _numIndices, bool _index32)
 	{
 		return topologyConvert(_conversion, _dst, _dstSize, _indices, _numIndices, _index32, g_allocator);
@@ -3332,6 +3344,7 @@ namespace bgfx
 
 	Init::Limits::Limits()
 		: maxEncoders(BGFX_CONFIG_DEFAULT_MAX_ENCODERS)
+		, minResourceCbSize(BGFX_CONFIG_MIN_RESOURCE_COMMAND_BUFFER_SIZE)
 		, transientVbSize(BGFX_CONFIG_TRANSIENT_VERTEX_BUFFER_SIZE)
 		, transientIbSize(BGFX_CONFIG_TRANSIENT_INDEX_BUFFER_SIZE)
 	{
@@ -3357,7 +3370,7 @@ namespace bgfx
 		resolve = _resolve;
 	}
 
-	bool init(const Init& _init)
+	bool init(const Init& _userInit)
 	{
 		if (NULL != s_ctx)
 		{
@@ -3365,12 +3378,10 @@ namespace bgfx
 			return false;
 		}
 
-		if (1   > _init.limits.maxEncoders
-		||  128 < _init.limits.maxEncoders)
-		{
-			BX_TRACE("init.limits.maxEncoders must be between 1 and 128.");
-			return false;
-		}
+		Init init = _userInit;
+
+		init.limits.maxEncoders       = bx::clamp<uint16_t>(init.limits.maxEncoders, 1, 128);
+		init.limits.minResourceCbSize = bx::min<uint32_t>(init.limits.minResourceCbSize, BGFX_CONFIG_MIN_RESOURCE_COMMAND_BUFFER_SIZE);
 
 		struct ErrorState
 		{
@@ -3383,9 +3394,9 @@ namespace bgfx
 
 		ErrorState::Enum errorState = ErrorState::Default;
 
-		if (NULL != _init.allocator)
+		if (NULL != init.allocator)
 		{
-			g_allocator = _init.allocator;
+			g_allocator = init.allocator;
 		}
 		else
 		{
@@ -3394,9 +3405,9 @@ namespace bgfx
 				s_allocatorStub = BX_NEW(&allocator, AllocatorStub);
 		}
 
-		if (NULL != _init.callback)
+		if (NULL != init.callback)
 		{
-			g_callback = _init.callback;
+			g_callback = init.callback;
 		}
 		else
 		{
@@ -3406,12 +3417,12 @@ namespace bgfx
 
 		if (true
 		&&  !BX_ENABLED(BX_PLATFORM_EMSCRIPTEN || BX_PLATFORM_PS4)
-		&&  RendererType::Noop != _init.type
-		&&  NULL == _init.platformData.ndt
-		&&  NULL == _init.platformData.nwh
-		&&  NULL == _init.platformData.context
-		&&  NULL == _init.platformData.backBuffer
-		&&  NULL == _init.platformData.backBufferDS
+		&&  RendererType::Noop != init.type
+		&&  NULL == init.platformData.ndt
+		&&  NULL == init.platformData.nwh
+		&&  NULL == init.platformData.context
+		&&  NULL == init.platformData.backBuffer
+		&&  NULL == init.platformData.backBufferDS
 		   )
 		{
 			BX_TRACE("bgfx platform data like window handle or backbuffer is not set, creating headless device.");
@@ -3438,12 +3449,13 @@ namespace bgfx
 		g_caps.limits.maxUniforms             = BGFX_CONFIG_MAX_UNIFORMS;
 		g_caps.limits.maxOcclusionQueries     = BGFX_CONFIG_MAX_OCCLUSION_QUERIES;
 		g_caps.limits.maxFBAttachments        = 1;
-		g_caps.limits.maxEncoders             = (0 != BGFX_CONFIG_MULTITHREADED) ? _init.limits.maxEncoders : 1;
-		g_caps.limits.transientVbSize         = _init.limits.transientVbSize;
-		g_caps.limits.transientIbSize         = _init.limits.transientIbSize;
+		g_caps.limits.maxEncoders             = (0 != BGFX_CONFIG_MULTITHREADED) ? init.limits.maxEncoders : 0;
+		g_caps.limits.minResourceCbSize       = init.limits.minResourceCbSize;
+		g_caps.limits.transientVbSize         = init.limits.transientVbSize;
+		g_caps.limits.transientIbSize         = init.limits.transientIbSize;
 
-		g_caps.vendorId = _init.vendorId;
-		g_caps.deviceId = _init.deviceId;
+		g_caps.vendorId = init.vendorId;
+		g_caps.deviceId = init.deviceId;
 
 		BX_TRACE("Init...");
 
@@ -3457,7 +3469,7 @@ namespace bgfx
 		errorState = ErrorState::ContextAllocated;
 
 		s_ctx = BX_ALIGNED_NEW(g_allocator, Context, Context::kAlignment);
-		if (s_ctx->init(_init) )
+		if (s_ctx->init(init) )
 		{
 			BX_TRACE("Init complete.");
 			return true;
