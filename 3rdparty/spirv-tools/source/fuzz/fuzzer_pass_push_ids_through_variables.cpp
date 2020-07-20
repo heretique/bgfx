@@ -80,12 +80,21 @@ void FuzzerPassPushIdsThroughVariables::Apply() {
         std::vector<opt::Instruction*> value_instructions =
             FindAvailableInstructions(
                 function, block, instruction_iterator,
-                [basic_type_id](opt::IRContext* /*unused*/,
-                                opt::Instruction* instruction) -> bool {
+                [basic_type_id, instruction_descriptor](
+                    opt::IRContext* ir_context,
+                    opt::Instruction* instruction) -> bool {
                   if (!instruction->result_id() || !instruction->type_id()) {
                     return false;
                   }
-                  return instruction->type_id() == basic_type_id;
+
+                  if (instruction->type_id() != basic_type_id) {
+                    return false;
+                  }
+
+                  return fuzzerutil::IdIsAvailableBeforeInstruction(
+                      ir_context,
+                      FindInstruction(instruction_descriptor, ir_context),
+                      instruction->result_id());
                 });
 
         if (value_instructions.empty()) {
@@ -95,13 +104,37 @@ void FuzzerPassPushIdsThroughVariables::Apply() {
         // If the pointer type does not exist, then create it.
         FindOrCreatePointerType(basic_type_id, variable_storage_class);
 
+        // TODO(https://github.com/KhronosGroup/SPIRV-Tools/issues/3403):
+        //  type support here is limited by the FindOrCreateZeroConstant
+        //  function.
+        const auto* type_inst =
+            GetIRContext()->get_def_use_mgr()->GetDef(basic_type_id);
+        assert(type_inst);
+        switch (type_inst->opcode()) {
+          case SpvOpTypeBool:
+          case SpvOpTypeFloat:
+          case SpvOpTypeInt:
+          case SpvOpTypeArray:
+          case SpvOpTypeMatrix:
+          case SpvOpTypeVector:
+          case SpvOpTypeStruct:
+            break;
+          default:
+            return;
+        }
+
+        // Create a constant to initialize the variable from. This might update
+        // module's id bound so it must be done before any fresh ids are
+        // computed.
+        auto initializer_id = FindOrCreateZeroConstant(basic_type_id);
+
         // Applies the push id through variable transformation.
         ApplyTransformation(TransformationPushIdThroughVariable(
             value_instructions[GetFuzzerContext()->RandomIndex(
                                    value_instructions)]
                 ->result_id(),
             GetFuzzerContext()->GetFreshId(), GetFuzzerContext()->GetFreshId(),
-            variable_storage_class, instruction_descriptor));
+            variable_storage_class, initializer_id, instruction_descriptor));
       });
 }
 

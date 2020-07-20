@@ -569,6 +569,7 @@ struct CLIArguments
 	SmallVector<uint32_t> msl_device_argument_buffers;
 	SmallVector<pair<uint32_t, uint32_t>> msl_dynamic_buffers;
 	SmallVector<pair<uint32_t, uint32_t>> msl_inline_uniform_blocks;
+	SmallVector<MSLShaderInput> msl_shader_inputs;
 	SmallVector<PLSArg> pls_in;
 	SmallVector<PLSArg> pls_out;
 	SmallVector<Remap> remaps;
@@ -596,6 +597,7 @@ struct CLIArguments
 	bool hlsl_support_nonzero_base = false;
 	bool hlsl_force_storage_buffer_as_uav = false;
 	bool hlsl_nonwritable_uav_texture_as_srv = false;
+	bool hlsl_enable_16bit_types = false;
 	HLSLBindingFlags hlsl_binding_flags = 0;
 	bool vulkan_semantics = false;
 	bool flatten_multidimensional_arrays = false;
@@ -615,6 +617,7 @@ static void print_version()
 
 static void print_help_backend()
 {
+	// clang-format off
 	fprintf(stderr, "\nSelect backend:\n"
 	        "\tBy default, OpenGL-style GLSL is the target, with #version and GLSL/ESSL information inherited from the SPIR-V module if present.\n"
 	        "\t[--vulkan-semantics] or [-V]:\n\t\tEmit Vulkan GLSL instead of plain GLSL. Makes use of Vulkan-only features to match SPIR-V.\n"
@@ -623,10 +626,12 @@ static void print_help_backend()
 	        "\t[--reflect]:\n\t\tEmit JSON reflection.\n"
 	        "\t[--cpp]:\n\t\tDEPRECATED. Emits C++ code.\n"
 	);
+	// clang-format on
 }
 
 static void print_help_glsl()
 {
+	// clang-format off
 	fprintf(stderr, "\nGLSL options:\n"
 	                "\t[--es]:\n\t\tForce ESSL.\n"
 	                "\t[--no-es]:\n\t\tForce desktop GLSL.\n"
@@ -667,10 +672,12 @@ static void print_help_glsl()
 	                "\t[--remap-variable-type <variable_name> <new_variable_type>]:\n\t\tRemaps a variable type based on name.\n"
 	                "\t\tPrimary use case is supporting external samplers in ESSL for video rendering on Android where you could remap a texture to a YUV one.\n"
 	);
+	// clang-format on
 }
 
 static void print_help_hlsl()
 {
+	// clang-format off
 	fprintf(stderr, "\nHLSL options:\n"
 	                "\t[--shader-model]:\n\t\tEnables a specific shader model, e.g. --shader-model 50 for SM 5.0.\n"
 	                "\t[--hlsl-enable-compat]:\n\t\tAllow point size and point coord to be used, even if they won't work as expected.\n"
@@ -687,11 +694,14 @@ static void print_help_hlsl()
 	                "\t\tShader must ensure that read/write state is consistent at all call sites.\n"
 	                "\t[--set-hlsl-vertex-input-semantic <location> <semantic>]:\n\t\tEmits a specific vertex input semantic for a given location.\n"
 	                "\t\tOtherwise, TEXCOORD# is used as semantics, where # is location.\n"
+	                "\t[--hlsl-enable-16bit-types]:\n\t\tEnables native use of half/int16_t/uint16_t and ByteAddressBuffer interaction with these types. Requires SM 6.2.\n"
 	);
+	// clang-format on
 }
 
 static void print_help_msl()
 {
+	// clang-format off
 	fprintf(stderr, "\nMSL options:\n"
 	                "\t[--msl-version <MMmmpp>]:\n\t\tUses a specific MSL version, e.g. --msl-version 20100 for MSL 2.1.\n"
 	                "\t[--msl-capture-output]:\n\t\tWrites geometry varyings to a buffer instead of as stage-outputs.\n"
@@ -736,11 +746,16 @@ static void print_help_msl()
 	                "\t[--msl-disable-frag-stencil-ref-builtin]:\n\t\tDisable FragStencilRef output. Useful if pipeline does not enable stencil output, as pipeline creation might otherwise fail.\n"
 	                "\t[--msl-enable-frag-output-mask <mask>]:\n\t\tOnly selectively enable fragment outputs. Useful if pipeline does not enable fragment output for certain locations, as pipeline creation might otherwise fail.\n"
 	                "\t[--msl-no-clip-distance-user-varying]:\n\t\tDo not emit user varyings to emulate gl_ClipDistance in fragment shaders.\n"
-	);
+	                "\t[--msl-shader-input <index> <format> <size>]:\n\t\tSpecify the format of the shader input at <index>.\n"
+	                "\t\t<format> can be 'u16', 'u8', or 'other', to indicate a 16-bit unsigned integer, 8-bit unsigned integer, "
+	                "or other-typed variable. <size> is the vector length of the variable, which must be greater than or equal to that declared in the shader.\n"
+	                "\t\tUseful if shader stage interfaces don't match up, as pipeline creation might otherwise fail.\n");
+	// clang-format on
 }
 
 static void print_help_common()
 {
+	// clang-format off
 	fprintf(stderr, "\nCommon options:\n"
 	                "\t[--entry name]:\n\t\tUse a specific entry point. By default, the first entry point in the module is used.\n"
 	                "\t[--stage <stage (vert, frag, geom, tesc, tese comp)>]:\n\t\tForces use of a certain shader stage.\n"
@@ -757,10 +772,12 @@ static void print_help_common()
 	                "\t\tHLSL/MSL: Rewrites [-w, w] Z range (GL) to D3D/Metal/Vulkan-style [0, w].\n"
 	                "\t[--flip-vert-y]:\n\t\tInverts gl_Position.y (or equivalent) at the end of a vertex shader. This is equivalent to using negative viewport height.\n"
 	);
+	// clang-format on
 }
 
 static void print_help_obscure()
 {
+	// clang-format off
 	fprintf(stderr, "\nObscure options:\n"
 	                "\tThese options are not meant to be used on a regular basis. They have some occasional uses in the test suite.\n"
 
@@ -772,12 +789,14 @@ static void print_help_obscure()
 	                "\t[--flatten-multidimensional-arrays]:\n\t\tDo not support multi-dimensional arrays and flatten them to one dimension.\n"
 	                "\t[--cpp-interface-name <name>]:\n\t\tEmit a specific class name in C++ codegen.\n"
 	);
+	// clang-format on
 }
 
 static void print_help()
 {
 	print_version();
 
+	// clang-format off
 	fprintf(stderr, "Usage: spirv-cross <...>\n"
 	                "\nBasic:\n"
 	                "\t[SPIR-V file]\n"
@@ -785,6 +804,7 @@ static void print_help()
 	                "\t[--dump-resources]:\n\t\tPrints a basic reflection of the SPIR-V module along with other output.\n"
 	                "\t[--help]:\n\t\tPrints this help message.\n"
 	);
+	// clang-format on
 
 	print_help_backend();
 	print_help_common();
@@ -973,6 +993,8 @@ static string compile_iteration(const CLIArguments &args, std::vector<uint32_t> 
 			msl_comp->add_dynamic_buffer(v.first, v.second, i++);
 		for (auto &v : args.msl_inline_uniform_blocks)
 			msl_comp->add_inline_uniform_block(v.first, v.second);
+		for (auto &v : args.msl_shader_inputs)
+			msl_comp->add_msl_shader_input(v);
 	}
 	else if (args.hlsl)
 		compiler.reset(new CompilerHLSL(move(spirv_parser.get_parsed_ir())));
@@ -1135,6 +1157,7 @@ static string compile_iteration(const CLIArguments &args, std::vector<uint32_t> 
 		hlsl_opts.support_nonzero_base_vertex_base_instance = args.hlsl_support_nonzero_base;
 		hlsl_opts.force_storage_buffer_as_uav = args.hlsl_force_storage_buffer_as_uav;
 		hlsl_opts.nonwritable_uav_texture_as_srv = args.hlsl_nonwritable_uav_texture_as_srv;
+		hlsl_opts.enable_16bit_types = args.hlsl_enable_16bit_types;
 		hlsl->set_hlsl_options(hlsl_opts);
 		hlsl->set_resource_binding_flags(args.hlsl_binding_flags);
 	}
@@ -1305,6 +1328,7 @@ static int main_inner(int argc, char *argv[])
 	        [&args](CLIParser &) { args.hlsl_force_storage_buffer_as_uav = true; });
 	cbs.add("--hlsl-nonwritable-uav-texture-as-srv",
 	        [&args](CLIParser &) { args.hlsl_nonwritable_uav_texture_as_srv = true; });
+	cbs.add("--hlsl-enable-16bit-types", [&args](CLIParser &) { args.hlsl_enable_16bit_types = true; });
 	cbs.add("--vulkan-semantics", [&args](CLIParser &) { args.vulkan_semantics = true; });
 	cbs.add("-V", [&args](CLIParser &) { args.vulkan_semantics = true; });
 	cbs.add("--flatten-multidimensional-arrays", [&args](CLIParser &) { args.flatten_multidimensional_arrays = true; });
@@ -1352,6 +1376,20 @@ static int main_inner(int argc, char *argv[])
 	        [&args](CLIParser &parser) { args.msl_enable_frag_output_mask = parser.next_hex_uint(); });
 	cbs.add("--msl-no-clip-distance-user-varying",
 	        [&args](CLIParser &) { args.msl_enable_clip_distance_user_varying = false; });
+	cbs.add("--msl-shader-input", [&args](CLIParser &parser) {
+		MSLShaderInput input;
+		// Make sure next_uint() is called in-order.
+		input.location = parser.next_uint();
+		const char *format = parser.next_value_string("other");
+		if (strcmp(format, "u16") == 0)
+			input.format = MSL_VERTEX_FORMAT_UINT16;
+		else if (strcmp(format, "u8") == 0)
+			input.format = MSL_VERTEX_FORMAT_UINT8;
+		else
+			input.format = MSL_VERTEX_FORMAT_OTHER;
+		input.vecsize = parser.next_uint();
+		args.msl_shader_inputs.push_back(input);
+	});
 	cbs.add("--extension", [&args](CLIParser &parser) { args.extensions.push_back(parser.next_string()); });
 	cbs.add("--rename-entry-point", [&args](CLIParser &parser) {
 		auto old_name = parser.next_string();
