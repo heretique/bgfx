@@ -665,6 +665,7 @@ namespace bgfx { namespace d3d11
 			, m_ags(NULL)
 			, m_featureLevel(D3D_FEATURE_LEVEL(0) )
 			, m_swapChain(NULL)
+			, m_needPresent(false)
 			, m_lost(false)
 			, m_numWindows(0)
 			, m_device(NULL)
@@ -686,7 +687,6 @@ namespace bgfx { namespace d3d11
 			, m_rtMsaa(false)
 			, m_timerQuerySupport(false)
 			, m_directAccessSupport(false)
-			, m_needPresent(false)
 		{
 			m_fbh.idx = kInvalidHandle;
 			bx::memSet(&m_scd, 0, sizeof(m_scd) );
@@ -1009,10 +1009,18 @@ namespace bgfx { namespace d3d11
 					bx::memSet(&m_scd, 0, sizeof(m_scd) );
 					m_scd.width  = _init.resolution.width;
 					m_scd.height = _init.resolution.height;
-					m_scd.format = (_init.resolution.reset & BGFX_RESET_SRGB_BACKBUFFER)
-						? s_textureFormat[_init.resolution.format].m_fmtSrgb
-						: s_textureFormat[_init.resolution.format].m_fmt
-						;
+
+					/*
+					 * According to https://docs.microsoft.com/en-us/windows/win32/direct3ddxgi/converting-data-color-space ,
+					 * it is OK to create the backbuffer with m_fmt (a non- _SRGB format), and then create the render target view into it
+					 * with m_fmtSrgb (the _SRGB format of same), and it will work identically as if you had created the swapchain with
+					 * m_fmtSrgb as the backbuffer format.
+					 *
+					 * Moreover, it is actually not desirable to create the backbuffer with an _SRGB format, because that
+					 * is incompatible with the flip presentation model, which is desirable for various reasons including
+					 * player embedding. 
+					 */
+					m_scd.format = s_textureFormat[_init.resolution.format].m_fmt;
 
 					updateMsaa(m_scd.format);
 					m_scd.sampleDesc  = s_msaa[(_init.resolution.reset&BGFX_RESET_MSAA_MASK)>>BGFX_RESET_MSAA_SHIFT];
@@ -1025,7 +1033,7 @@ namespace bgfx { namespace d3d11
 						;
 					m_scd.swapEffect = m_swapEffect;
 					m_scd.alphaMode  = DXGI_ALPHA_MODE_IGNORE;
-					m_scd.flags      = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+					m_scd.flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
 
 					m_scd.maxFrameLatency = bx::min<uint8_t>(_init.resolution.maxFrameLatency, 3);
 					m_scd.nwh             = g_platformData.nwh;
@@ -1041,6 +1049,12 @@ namespace bgfx { namespace d3d11
 
 						if (FAILED(hr) )
 						{
+							BX_TRACE(
+								  "CreateSwapChain with DXGI_SWAP_EFFECT(%d) failed with HRESULT(%x)"
+								, m_scd.swapEffect
+								, hr
+								);
+
 							// DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL is not available on win7
 							// Try again with DXGI_SWAP_EFFECT_DISCARD
 							m_swapEffect      = DXGI_SWAP_EFFECT_DISCARD;
@@ -1073,7 +1087,12 @@ namespace bgfx { namespace d3d11
 							desc.Height     = m_scd.height;
 							desc.MipLevels  = 1;
 							desc.ArraySize  = 1;
-							desc.Format     = m_scd.format;
+							/*
+							* According to https://docs.microsoft.com/en-us/windows/win32/direct3ddxgi/converting-data-color-space ,
+							* ONLY the backbuffer from swapchain can be created without *_SRGB format, custom backbuffer should be created the same
+							* format as well as render target view.
+							*/
+							desc.Format     = (m_resolution.reset & BGFX_RESET_SRGB_BACKBUFFER) ? s_textureFormat[m_resolution.format].m_fmtSrgb : s_textureFormat[m_resolution.format].m_fmt;
 							desc.SampleDesc = m_scd.sampleDesc;
 							desc.Usage      = D3D11_USAGE_DEFAULT;
 							desc.BindFlags  = D3D11_BIND_RENDER_TARGET;
@@ -1404,7 +1423,11 @@ namespace bgfx { namespace d3d11
 							}
 							else
 							{
-								BX_TRACE("CheckFeatureSupport failed with %x for format %s.", hr, getName(TextureFormat::Enum(ii) ) );
+								BX_TRACE(
+									  "CheckFeatureSupport failed with HRESULT(%x) for format %s."
+									, hr
+									, getName(TextureFormat::Enum(ii) )
+									);
 							}
 
 							if (0 != (support & BGFX_CAPS_FORMAT_TEXTURE_IMAGE) )
@@ -1480,7 +1503,11 @@ namespace bgfx { namespace d3d11
 							}
 							else
 							{
-								BX_TRACE("CheckFeatureSupport failed with %x for sRGB format %s.", hr, getName(TextureFormat::Enum(ii) ) );
+								BX_TRACE(
+									  "CheckFeatureSupport failed with HRESULT(%x) for sRGB format %s."
+									, hr
+									, getName(TextureFormat::Enum(ii) )
+									);
 							}
 						}
 						else
@@ -2178,10 +2205,12 @@ namespace bgfx { namespace d3d11
 					: D3D11_RTV_DIMENSION_TEXTURE2D
 					;
 				desc.Texture2D.MipSlice = 0;
-				desc.Format = (m_resolution.reset & BGFX_RESET_SRGB_BACKBUFFER)
-					? m_scd.format == DXGI_FORMAT_R8G8B8A8_UNORM ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : m_scd.format
-					: m_scd.format
-					;
+
+				/* go find the srgb version of this format to make a render target view
+				 * with the srgb version. this is OK because of this:
+				 * https://docs.microsoft.com/en-us/windows/win32/direct3ddxgi/converting-data-color-space
+				 */
+				desc.Format = (m_resolution.reset & BGFX_RESET_SRGB_BACKBUFFER) ? s_textureFormat[m_resolution.format].m_fmtSrgb : s_textureFormat[m_resolution.format].m_fmt;
 
 				DX_CHECK(m_device->CreateRenderTargetView(NULL == m_msaaRt ? backBufferColor : m_msaaRt, &desc, &m_backBufferColor) );
 				DX_RELEASE(backBufferColor, 0);
@@ -2262,9 +2291,10 @@ namespace bgfx { namespace d3d11
 				}
 
 				m_lost = isLost(hr);
-				BGFX_FATAL(!m_lost
+				BGFX_FATAL(
+					  !m_lost
 					, bgfx::Fatal::DeviceLost
-					, "Device is lost. FAILED 0x%08x %s (%s)"
+					, "Device is lost. FAILED HRESULT(%x) %s (%s)"
 					, hr
 					, getLostReason(hr)
 					, DXGI_ERROR_DEVICE_REMOVED == hr ? getLostReason(m_device->GetDeviceRemovedReason() ) : "no info"
@@ -2390,9 +2420,8 @@ namespace bgfx { namespace d3d11
 
 				m_scd.width  = _resolution.width;
 				m_scd.height = _resolution.height;
-				m_scd.format = (_resolution.reset & BGFX_RESET_SRGB_BACKBUFFER)
-					? s_textureFormat[_resolution.format].m_fmtSrgb
-					: s_textureFormat[_resolution.format].m_fmt
+				// see comment in init() about why we don't worry about BGFX_RESET_SRGB_BACKBUFFER here
+				m_scd.format = s_textureFormat[_resolution.format].m_fmt
 					;
 
 				preReset();
@@ -2437,7 +2466,7 @@ namespace bgfx { namespace d3d11
 						desc.Height     = m_scd.height;
 						desc.MipLevels  = 1;
 						desc.ArraySize  = 1;
-						desc.Format     = m_scd.format;
+						desc.Format     = (m_resolution.reset & BGFX_RESET_SRGB_BACKBUFFER) ? s_textureFormat[m_resolution.format].m_fmtSrgb : s_textureFormat[m_resolution.format].m_fmt;
 						desc.SampleDesc = m_scd.sampleDesc;
 						desc.Usage      = D3D11_USAGE_DEFAULT;
 						desc.BindFlags  = D3D11_BIND_RENDER_TARGET;

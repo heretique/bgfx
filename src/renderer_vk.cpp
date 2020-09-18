@@ -614,9 +614,13 @@ VK_IMPORT_DEVICE
 			, _userData
 			, s_debugReportObjectType
 		);
+
+		// For more info about 'VUID-VkSwapchainCreateInfoKHR-imageExtent-01274'
+		// check https://github.com/KhronosGroup/Vulkan-Docs/issues/1144
 		if (!bx::strFind(_message, "PointSizeMissing").isEmpty()
 		||  !bx::strFind(_message, "SwapchainTooManyImages").isEmpty()
-		||  !bx::strFind(_message, "SwapchainImageNotAcquired").isEmpty() )
+		||  !bx::strFind(_message, "SwapchainImageNotAcquired").isEmpty()
+		||  !bx::strFind(_message, "VUID-VkSwapchainCreateInfoKHR-imageExtent-01274").isEmpty() )
 		{
 			return VK_FALSE;
 		}
@@ -2263,8 +2267,10 @@ VK_IMPORT_DEVICE
 				vkSetDebugUtilsObjectNameEXT = stubSetDebugUtilsObjectNameEXT;
 			}
 
-			if (NULL == vkCmdBeginDebugUtilsLabelEXT
-			||  NULL == vkCmdEndDebugUtilsLabelEXT)
+			if (!s_extension[Extension::EXT_debug_utils].m_supported
+			||  NULL == vkCmdBeginDebugUtilsLabelEXT
+			||  NULL == vkCmdEndDebugUtilsLabelEXT
+			   )
 			{
 				vkCmdBeginDebugUtilsLabelEXT = stubCmdBeginDebugUtilsLabelEXT;
 				vkCmdEndDebugUtilsLabelEXT   = stubCmdEndDebugUtilsLabelEXT;
@@ -2452,8 +2458,8 @@ VK_IMPORT_DEVICE
 				pi.pImageIndices  = &m_backBufferColorIdx;
 				pi.pResults       = NULL;
 				VkResult result = vkQueuePresentKHR(m_queueGraphics, &pi);
-				if (VK_ERROR_OUT_OF_DATE_KHR == result
-				||  VK_SUBOPTIMAL_KHR        == result)
+				if (VK_ERROR_OUT_OF_DATE_KHR       == result
+				||  VK_ERROR_VALIDATION_FAILED_EXT == result)
 				{
 					m_needToRefreshSwapchain = true;
 				}
@@ -5187,8 +5193,8 @@ VK_DESTROY
 			m_height    = ti.height;
 			m_depth     = ti.depth;
 			m_numLayers = ti.numLayers;
-			m_requestedFormat = bgfx::TextureFormat::Enum(imageContainer.m_format);
-			m_textureFormat = getViableTextureFormat(imageContainer);
+			m_requestedFormat = uint8_t(imageContainer.m_format);
+			m_textureFormat   = uint8_t(getViableTextureFormat(imageContainer) );
 			m_format = bimg::isDepth(bimg::TextureFormat::Enum(m_textureFormat) )
 				? s_textureFormat[m_textureFormat].m_fmtDsv
 				: (m_flags & BGFX_TEXTURE_SRGB) ? s_textureFormat[m_textureFormat].m_fmtSrgb : s_textureFormat[m_textureFormat].m_fmt
@@ -5961,8 +5967,8 @@ VK_DESTROY
 			, &m_backBufferColorIdx
 			);
 
-		if (VK_ERROR_OUT_OF_DATE_KHR == result
-		||  VK_SUBOPTIMAL_KHR        == result)
+		if (VK_ERROR_OUT_OF_DATE_KHR       == result
+		||  VK_ERROR_VALIDATION_FAILED_EXT == result)
 		{
 			m_needToRefreshSwapchain = true;
 			return;
