@@ -1041,194 +1041,194 @@ public static partial class bgfx
 		FragmentOrdering       = 0x0000000000000040,
 	
 		/// <summary>
-		/// Read/Write frame buffer attachments are supported.
-		/// </summary>
-		FramebufferRw          = 0x0000000000000080,
-	
-		/// <summary>
 		/// Graphics debugger is present.
 		/// </summary>
-		GraphicsDebugger       = 0x0000000000000100,
-		Reserved               = 0x0000000000000200,
+		GraphicsDebugger       = 0x0000000000000080,
 	
 		/// <summary>
 		/// HDR10 rendering is supported.
 		/// </summary>
-		Hdr10                  = 0x0000000000000400,
+		Hdr10                  = 0x0000000000000100,
 	
 		/// <summary>
 		/// HiDPI rendering is supported.
 		/// </summary>
-		Hidpi                  = 0x0000000000000800,
+		Hidpi                  = 0x0000000000000200,
+	
+		/// <summary>
+		/// Image Read/Write is supported.
+		/// </summary>
+		ImageRw                = 0x0000000000000400,
 	
 		/// <summary>
 		/// 32-bit indices are supported.
 		/// </summary>
-		Index32                = 0x0000000000001000,
+		Index32                = 0x0000000000000800,
 	
 		/// <summary>
 		/// Instancing is supported.
 		/// </summary>
-		Instancing             = 0x0000000000002000,
+		Instancing             = 0x0000000000001000,
 	
 		/// <summary>
 		/// Occlusion query is supported.
 		/// </summary>
-		OcclusionQuery         = 0x0000000000004000,
+		OcclusionQuery         = 0x0000000000002000,
 	
 		/// <summary>
 		/// Renderer is on separate thread.
 		/// </summary>
-		RendererMultithreaded  = 0x0000000000008000,
+		RendererMultithreaded  = 0x0000000000004000,
 	
 		/// <summary>
 		/// Multiple windows are supported.
 		/// </summary>
-		SwapChain              = 0x0000000000010000,
+		SwapChain              = 0x0000000000008000,
 	
 		/// <summary>
 		/// 2D texture array is supported.
 		/// </summary>
-		Texture2dArray         = 0x0000000000020000,
+		Texture2dArray         = 0x0000000000010000,
 	
 		/// <summary>
 		/// 3D textures are supported.
 		/// </summary>
-		Texture3d              = 0x0000000000040000,
+		Texture3d              = 0x0000000000020000,
 	
 		/// <summary>
 		/// Texture blit is supported.
 		/// </summary>
-		TextureBlit            = 0x0000000000080000,
-	
-		/// <summary>
-		/// All texture compare modes are supported.
-		/// </summary>
-		TextureCompareReserved = 0x0000000000100000,
+		TextureBlit            = 0x0000000000040000,
+		TextureCompareReserved = 0x0000000000080000,
 	
 		/// <summary>
 		/// Texture compare less equal mode is supported.
 		/// </summary>
-		TextureCompareLequal   = 0x0000000000200000,
+		TextureCompareLequal   = 0x0000000000100000,
 	
 		/// <summary>
 		/// Cubemap texture array is supported.
 		/// </summary>
-		TextureCubeArray       = 0x0000000000400000,
+		TextureCubeArray       = 0x0000000000200000,
 	
 		/// <summary>
 		/// CPU direct access to GPU texture memory.
 		/// </summary>
-		TextureDirectAccess    = 0x0000000000800000,
+		TextureDirectAccess    = 0x0000000000400000,
 	
 		/// <summary>
 		/// Read-back texture is supported.
 		/// </summary>
-		TextureReadBack        = 0x0000000001000000,
+		TextureReadBack        = 0x0000000000800000,
 	
 		/// <summary>
 		/// Vertex attribute half-float is supported.
 		/// </summary>
-		VertexAttribHalf       = 0x0000000002000000,
+		VertexAttribHalf       = 0x0000000001000000,
 	
 		/// <summary>
 		/// Vertex attribute 10_10_10_2 is supported.
 		/// </summary>
-		VertexAttribUint10     = 0x0000000004000000,
+		VertexAttribUint10     = 0x0000000002000000,
 	
 		/// <summary>
 		/// Rendering with VertexID only is supported.
 		/// </summary>
-		VertexId               = 0x0000000008000000,
+		VertexId               = 0x0000000004000000,
 	
 		/// <summary>
 		/// All texture compare modes are supported.
 		/// </summary>
-		TextureCompareAll      = 0x0000000000300000,
+		TextureCompareAll      = 0x0000000000180000,
 	}
 	
 	[Flags]
-	public enum CapsFormatFlags : ushort
+	public enum CapsFormatFlags : uint
 	{
 		/// <summary>
 		/// Texture format is not supported.
 		/// </summary>
-		TextureNone            = 0x0000,
+		TextureNone            = 0x00000000,
 	
 		/// <summary>
 		/// Texture format is supported.
 		/// </summary>
-		Texture2d              = 0x0001,
+		Texture2d              = 0x00000001,
 	
 		/// <summary>
 		/// Texture as sRGB format is supported.
 		/// </summary>
-		Texture2dSrgb          = 0x0002,
+		Texture2dSrgb          = 0x00000002,
 	
 		/// <summary>
 		/// Texture format is emulated.
 		/// </summary>
-		Texture2dEmulated      = 0x0004,
+		Texture2dEmulated      = 0x00000004,
 	
 		/// <summary>
 		/// Texture format is supported.
 		/// </summary>
-		Texture3d              = 0x0008,
+		Texture3d              = 0x00000008,
 	
 		/// <summary>
 		/// Texture as sRGB format is supported.
 		/// </summary>
-		Texture3dSrgb          = 0x0010,
+		Texture3dSrgb          = 0x00000010,
 	
 		/// <summary>
 		/// Texture format is emulated.
 		/// </summary>
-		Texture3dEmulated      = 0x0020,
+		Texture3dEmulated      = 0x00000020,
 	
 		/// <summary>
 		/// Texture format is supported.
 		/// </summary>
-		TextureCube            = 0x0040,
+		TextureCube            = 0x00000040,
 	
 		/// <summary>
 		/// Texture as sRGB format is supported.
 		/// </summary>
-		TextureCubeSrgb        = 0x0080,
+		TextureCubeSrgb        = 0x00000080,
 	
 		/// <summary>
 		/// Texture format is emulated.
 		/// </summary>
-		TextureCubeEmulated    = 0x0100,
+		TextureCubeEmulated    = 0x00000100,
 	
 		/// <summary>
 		/// Texture format can be used from vertex shader.
 		/// </summary>
-		TextureVertex          = 0x0200,
+		TextureVertex          = 0x00000200,
 	
 		/// <summary>
-		/// Texture format can be used as image from compute shader.
+		/// Texture format can be used as image and read from.
 		/// </summary>
-		TextureImage           = 0x0400,
+		TextureImageRead       = 0x00000400,
+	
+		/// <summary>
+		/// Texture format can be used as image and written to.
+		/// </summary>
+		TextureImageWrite      = 0x00000800,
 	
 		/// <summary>
 		/// Texture format can be used as frame buffer.
 		/// </summary>
-		TextureFramebuffer     = 0x0800,
+		TextureFramebuffer     = 0x00001000,
 	
 		/// <summary>
 		/// Texture format can be used as MSAA frame buffer.
 		/// </summary>
-		TextureFramebufferMsaa = 0x1000,
+		TextureFramebufferMsaa = 0x00002000,
 	
 		/// <summary>
 		/// Texture can be sampled as MSAA.
 		/// </summary>
-		TextureMsaa            = 0x2000,
+		TextureMsaa            = 0x00004000,
 	
 		/// <summary>
 		/// Texture format supports auto-generated mips.
 		/// </summary>
-		TextureMipAutogen      = 0x4000,
+		TextureMipAutogen      = 0x00008000,
 	}
 	
 	[Flags]

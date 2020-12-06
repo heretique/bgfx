@@ -364,7 +364,6 @@ namespace bgfx { namespace mtl
 			, m_rtMsaa(false)
 			, m_capture(NULL)
 			, m_captureSize(0)
-			, m_saveScreenshot(false)
 		{
 			bx::memSet(&m_windows, 0xff, sizeof(m_windows) );
 		}
@@ -479,6 +478,7 @@ namespace bgfx { namespace mtl
 			g_caps.supported |= (0
 				| BGFX_CAPS_ALPHA_TO_COVERAGE
 				| BGFX_CAPS_BLEND_INDEPENDENT
+				| BGFX_CAPS_COMPUTE
 				| BGFX_CAPS_FRAGMENT_DEPTH
 				| BGFX_CAPS_INDEX32
 				| BGFX_CAPS_INSTANCING
@@ -492,7 +492,7 @@ namespace bgfx { namespace mtl
 				| BGFX_CAPS_TEXTURE_READ_BACK
 				| BGFX_CAPS_VERTEX_ATTRIB_HALF
 				| BGFX_CAPS_VERTEX_ATTRIB_UINT10
-				| BGFX_CAPS_COMPUTE
+				| BGFX_CAPS_VERTEX_ID
 				);
 
 			if (BX_ENABLED(BX_PLATFORM_IOS) )
@@ -982,12 +982,6 @@ namespace bgfx { namespace mtl
 			m_uniformReg.remove(_handle);
 		}
 
-		void requestScreenShotPre(const char* _filePath)
-		{
-			BX_UNUSED(_filePath);
-			m_saveScreenshot = true;
-		}
-
 		void requestScreenShot(FrameBufferHandle _handle, const char* _filePath) override
 		{
 			BX_UNUSED(_handle);
@@ -1349,31 +1343,37 @@ namespace bgfx { namespace mtl
 				for (uint32_t ii = 0; ii < g_caps.limits.maxFBAttachments; ++ii)
 				{
 					MTLRenderPassColorAttachmentDescriptor* desc = renderPassDescriptor.colorAttachments[ii];
+
 					if (NULL != desc.texture)
 					{
-						desc.loadAction = MTLLoadActionLoad;
-						desc.storeAction = desc.resolveTexture == nil ?
-											MTLStoreActionStore :
-											MTLStoreActionMultisampleResolve;
+						desc.loadAction  = MTLLoadActionLoad;
+						desc.storeAction = desc.resolveTexture == nil
+							? MTLStoreActionStore
+							: MTLStoreActionMultisampleResolve
+							;
 					}
 				}
 
 				RenderPassDepthAttachmentDescriptor depthAttachment = renderPassDescriptor.depthAttachment;
+
 				if (NULL != depthAttachment.texture)
 				{
-					depthAttachment.loadAction = MTLLoadActionLoad;
-					depthAttachment.storeAction = depthAttachment.resolveTexture == nil ?
-													MTLStoreActionStore :
-													MTLStoreActionMultisampleResolve;
+					depthAttachment.loadAction  = MTLLoadActionLoad;
+					depthAttachment.storeAction = depthAttachment.resolveTexture == nil
+						? MTLStoreActionStore
+						: MTLStoreActionMultisampleResolve
+						;
 				}
 
 				RenderPassStencilAttachmentDescriptor stencilAttachment = renderPassDescriptor.stencilAttachment;
+
 				if (NULL != stencilAttachment.texture)
 				{
-					stencilAttachment.loadAction   = MTLLoadActionLoad;
-					stencilAttachment.storeAction = stencilAttachment.resolveTexture == nil ?
-													MTLStoreActionStore :
-													MTLStoreActionMultisampleResolve;
+					stencilAttachment.loadAction  = MTLLoadActionLoad;
+					stencilAttachment.storeAction = stencilAttachment.resolveTexture == nil
+						? MTLStoreActionStore
+						: MTLStoreActionMultisampleResolve
+						;
 				}
 
 				m_renderCommandEncoder = m_commandBuffer.renderCommandEncoderWithDescriptor(renderPassDescriptor);
@@ -1446,7 +1446,7 @@ namespace bgfx { namespace mtl
 
 #define CASE_IMPLEMENT_UNIFORM(_uniform, _dxsuffix, _type) \
 	case UniformType::_uniform:                            \
-	case UniformType::_uniform|kUniformFragmentBit:   \
+	case UniformType::_uniform|kUniformFragmentBit:        \
 	{                                                      \
 		setShaderUniform(uint8_t(type), loc, data, num);   \
 	}                                                      \
@@ -2390,7 +2390,6 @@ namespace bgfx { namespace mtl
 		SamplerDescriptor        m_samplerDescriptor;
 
 		// currently active objects data
-		bool                 m_saveScreenshot;
 		Texture              m_screenshotTarget;
 		ShaderMtl            m_screenshotBlitProgramVsh;
 		ShaderMtl            m_screenshotBlitProgramFsh;
@@ -3621,15 +3620,6 @@ namespace bgfx { namespace mtl
 			const TextureMtl& src = m_textures[blit.m_src.idx];
 			const TextureMtl& dst = m_textures[blit.m_dst.idx];
 
-			uint32_t srcWidth  = bx::uint32_min(src.m_width,  blit.m_srcX + blit.m_width)  - blit.m_srcX;
-			uint32_t srcHeight = bx::uint32_min(src.m_height, blit.m_srcY + blit.m_height) - blit.m_srcY;
-			uint32_t srcDepth  = bx::uint32_min(src.m_depth,  blit.m_srcZ + blit.m_depth)  - blit.m_srcZ;
-			uint32_t dstWidth  = bx::uint32_min(dst.m_width,  blit.m_dstX + blit.m_width)  - blit.m_dstX;
-			uint32_t dstHeight = bx::uint32_min(dst.m_height, blit.m_dstY + blit.m_height) - blit.m_dstY;
-			uint32_t dstDepth  = bx::uint32_min(dst.m_depth,  blit.m_dstZ + blit.m_depth)  - blit.m_dstZ;
-			uint32_t width     = bx::uint32_min(srcWidth,  dstWidth);
-			uint32_t height    = bx::uint32_min(srcHeight, dstHeight);
-			uint32_t depth     = bx::uint32_min(srcDepth,  dstDepth);
 #if BX_PLATFORM_OSX
 			bool     readBack  = !!(dst.m_flags & BGFX_TEXTURE_READ_BACK);
 #endif  // BX_PLATFORM_OSX
@@ -3641,7 +3631,7 @@ namespace bgfx { namespace mtl
 					, 0
 					, 0
 					, MTLOriginMake(blit.m_srcX, blit.m_srcY, blit.m_srcZ)
-					, MTLSizeMake(width, height, bx::uint32_imax(depth, 1) )
+					, MTLSizeMake(blit.m_width, blit.m_height, bx::uint32_imax(blit.m_depth, 1) )
 					, dst.m_ptr
 					, 0
 					, 0
@@ -3662,7 +3652,7 @@ namespace bgfx { namespace mtl
 					, blit.m_srcZ
 					, blit.m_srcMip
 					, MTLOriginMake(blit.m_srcX, blit.m_srcY, 0)
-					, MTLSizeMake(width, height, 1)
+					, MTLSizeMake(blit.m_width, blit.m_height, 1)
 					, dst.m_ptr
 					, blit.m_dstZ
 					, blit.m_dstMip
@@ -3709,7 +3699,7 @@ namespace bgfx { namespace mtl
 
 		updateResolution(_render->m_resolution);
 
-		if (m_saveScreenshot
+		if (0 != _render->m_numScreenShots
 		||  NULL != m_capture)
 		{
 			if (m_screenshotTarget)
@@ -3749,8 +3739,6 @@ namespace bgfx { namespace mtl
 
 				m_screenshotTarget = m_device.newTextureWithDescriptor(m_textureDescriptor);
 			}
-
-			m_saveScreenshot = false;
 		}
 		else
 		{
@@ -4570,6 +4558,7 @@ namespace bgfx { namespace mtl
 				if (0 != currentState.m_streamMask)
 				{
 					uint32_t numVertices = draw.m_numVertices;
+
 					if (UINT32_MAX == numVertices)
 					{
 						const VertexBufferMtl& vb = m_vertexBuffers[currentState.m_stream[0].m_handle.idx];
@@ -4599,9 +4588,9 @@ namespace bgfx { namespace mtl
 							MTLIndexType indexType = 0 == (ib.m_flags & BGFX_BUFFER_INDEX32) ? MTLIndexTypeUInt16 : MTLIndexTypeUInt32;
 
 							numDrawIndirect = UINT16_MAX == draw.m_numIndirect
-							? vb.m_size/BGFX_CONFIG_DRAW_INDIRECT_STRIDE
-							: draw.m_numIndirect
-							;
+								? vb.m_size/BGFX_CONFIG_DRAW_INDIRECT_STRIDE
+								: draw.m_numIndirect
+								;
 
 							for (uint32_t ii = 0; ii < numDrawIndirect; ++ii)
 							{
@@ -4611,9 +4600,10 @@ namespace bgfx { namespace mtl
 						else
 						{
 							numDrawIndirect = UINT16_MAX == draw.m_numIndirect
-							? vb.m_size/BGFX_CONFIG_DRAW_INDIRECT_STRIDE
-							: draw.m_numIndirect
-							;
+								? vb.m_size/BGFX_CONFIG_DRAW_INDIRECT_STRIDE
+								: draw.m_numIndirect
+								;
+
 							for (uint32_t ii = 0; ii < numDrawIndirect; ++ii)
 							{
 								rce.drawPrimitives(prim.m_type,vb.m_ptr, (draw.m_startIndirect + ii) * BGFX_CONFIG_DRAW_INDIRECT_STRIDE);
@@ -4761,8 +4751,14 @@ namespace bgfx { namespace mtl
 				tvm.clear();
 				uint16_t pos = 0;
 				tvm.printf(0, pos++, BGFX_CONFIG_DEBUG ? 0x8c : 0x8f
-					, " %s / " BX_COMPILER_NAME " / " BX_CPU_NAME " / " BX_ARCH_NAME " / " BX_PLATFORM_NAME " "
+					, " %s / " BX_COMPILER_NAME
+					  " / " BX_CPU_NAME
+					  " / " BX_ARCH_NAME
+					  " / " BX_PLATFORM_NAME
+					  " / Version 1.%d.%d (commit: " BGFX_REV_SHA1 ")"
 					, getRendererName()
+					, BGFX_API_VERSION
+					, BGFX_REV_NUMBER
 					);
 
 				pos = 10;

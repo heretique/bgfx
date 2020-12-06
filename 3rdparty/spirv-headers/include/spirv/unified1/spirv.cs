@@ -49,7 +49,7 @@ namespace Spv
     {
         public const uint MagicNumber = 0x07230203;
         public const uint Version = 0x00010500;
-        public const uint Revision = 3;
+        public const uint Revision = 4;
         public const uint OpCodeMask = 0xffff;
         public const uint WordCountShift = 16;
 
@@ -270,6 +270,8 @@ namespace Spv
             Rg8ui = 37,
             R16ui = 38,
             R8ui = 39,
+            R64ui = 40,
+            R64i = 41,
         }
 
         public enum ImageChannelOrder
@@ -556,8 +558,10 @@ namespace Spv
             BaseVertex = 4424,
             BaseInstance = 4425,
             DrawIndex = 4426,
+            PrimitiveShadingRateKHR = 4432,
             DeviceIndex = 4438,
             ViewIndex = 4440,
+            ShadingRateKHR = 4444,
             BaryCoordNoPerspAMD = 4992,
             BaryCoordNoPerspCentroidAMD = 4993,
             BaryCoordNoPerspSampleAMD = 4994,
@@ -608,7 +612,6 @@ namespace Spv
             ObjectToWorldNV = 5330,
             WorldToObjectKHR = 5331,
             WorldToObjectNV = 5331,
-            HitTKHR = 5332,
             HitTNV = 5332,
             HitKindKHR = 5333,
             HitKindNV = 5333,
@@ -874,6 +877,7 @@ namespace Spv
             GroupNonUniformQuad = 68,
             ShaderLayer = 69,
             ShaderViewportIndex = 70,
+            FragmentShadingRateKHR = 4422,
             SubgroupBallotKHR = 4423,
             DrawParameters = 4427,
             SubgroupVoteKHR = 4431,
@@ -898,12 +902,15 @@ namespace Spv
             RoundingModeRTE = 4467,
             RoundingModeRTZ = 4468,
             RayQueryProvisionalKHR = 4471,
-            RayTraversalPrimitiveCullingProvisionalKHR = 4478,
+            RayQueryKHR = 4472,
+            RayTraversalPrimitiveCullingKHR = 4478,
+            RayTracingKHR = 4479,
             Float16ImageAMD = 5008,
             ImageGatherBiasLodAMD = 5009,
             FragmentMaskAMD = 5010,
             StencilExportEXT = 5013,
             ImageReadWriteLodAMD = 5015,
+            Int64ImageEXT = 5016,
             ShaderClockKHR = 5055,
             SampleMaskOverrideCoverageNV = 5249,
             GeometryShaderPassthroughNV = 5251,
@@ -1026,6 +1033,23 @@ namespace Spv
         {
             RayQueryCandidateIntersectionTriangleKHR = 0,
             RayQueryCandidateIntersectionAABBKHR = 1,
+        }
+
+        public enum FragmentShadingRateShift
+        {
+            Vertical2Pixels = 0,
+            Vertical4Pixels = 1,
+            Horizontal2Pixels = 2,
+            Horizontal4Pixels = 3,
+        }
+
+        public enum FragmentShadingRateMask
+        {
+            MaskNone = 0,
+            Vertical2Pixels = 0x00000001,
+            Vertical4Pixels = 0x00000002,
+            Horizontal2Pixels = 0x00000004,
+            Horizontal4Pixels = 0x00000008,
         }
 
         public enum Op
@@ -1381,7 +1405,12 @@ namespace Spv
             OpSubgroupAnyKHR = 4429,
             OpSubgroupAllEqualKHR = 4430,
             OpSubgroupReadInvocationKHR = 4432,
-            OpTypeRayQueryProvisionalKHR = 4472,
+            OpTraceRayKHR = 4445,
+            OpExecuteCallableKHR = 4446,
+            OpConvertUToAccelerationStructureKHR = 4447,
+            OpIgnoreIntersectionKHR = 4448,
+            OpTerminateRayKHR = 4449,
+            OpTypeRayQueryKHR = 4472,
             OpRayQueryInitializeKHR = 4473,
             OpRayQueryTerminateKHR = 4474,
             OpRayQueryGenerateIntersectionKHR = 4475,
@@ -1404,15 +1433,11 @@ namespace Spv
             OpWritePackedPrimitiveIndices4x8NV = 5299,
             OpReportIntersectionKHR = 5334,
             OpReportIntersectionNV = 5334,
-            OpIgnoreIntersectionKHR = 5335,
             OpIgnoreIntersectionNV = 5335,
-            OpTerminateRayKHR = 5336,
             OpTerminateRayNV = 5336,
             OpTraceNV = 5337,
-            OpTraceRayKHR = 5337,
             OpTypeAccelerationStructureKHR = 5341,
             OpTypeAccelerationStructureNV = 5341,
-            OpExecuteCallableKHR = 5344,
             OpExecuteCallableNV = 5344,
             OpTypeCooperativeMatrixNV = 5358,
             OpCooperativeMatrixLoadNV = 5359,

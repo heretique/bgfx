@@ -337,7 +337,7 @@ int32_t spvOpcodeGeneratesType(SpvOp op) {
     case SpvOpTypeCooperativeMatrixNV:
     // case SpvOpTypeAccelerationStructureKHR: covered by
     // SpvOpTypeAccelerationStructureNV
-    case SpvOpTypeRayQueryProvisionalKHR:
+    case SpvOpTypeRayQueryKHR:
       return true;
     default:
       // In particular, OpTypeForwardPointer does not generate a type,
@@ -726,6 +726,23 @@ bool spvOpcodeIsAccessChain(SpvOp opcode) {
     case SpvOpInBoundsAccessChain:
     case SpvOpPtrAccessChain:
     case SpvOpInBoundsPtrAccessChain:
+      return true;
+    default:
+      return false;
+  }
+}
+
+bool spvOpcodeIsBit(SpvOp opcode) {
+  switch (opcode) {
+    case SpvOpShiftRightLogical:
+    case SpvOpShiftRightArithmetic:
+    case SpvOpShiftLeftLogical:
+    case SpvOpBitwiseOr:
+    case SpvOpBitwiseXor:
+    case SpvOpBitwiseAnd:
+    case SpvOpNot:
+    case SpvOpBitReverse:
+    case SpvOpBitCount:
       return true;
     default:
       return false;
