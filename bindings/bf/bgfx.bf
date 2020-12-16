@@ -1030,7 +1030,7 @@ public static class bgfx
 		DrawIndirect           = 0x0000000000000010,
 	
 		/// <summary>
-		/// Fragment depth is accessible in fragment shader.
+		/// Fragment depth is available in fragment shader.
 		/// </summary>
 		FragmentDepth          = 0x0000000000000020,
 	
@@ -1134,6 +1134,11 @@ public static class bgfx
 		/// Rendering with VertexID only is supported.
 		/// </summary>
 		VertexId               = 0x0000000004000000,
+	
+		/// <summary>
+		/// Viewport layer is available in vertex shader.
+		/// </summary>
+		ViewportLayerArray     = 0x0000000008000000,
 	
 		/// <summary>
 		/// All texture compare modes are supported.
@@ -2069,6 +2074,7 @@ public static class bgfx
 		public uint32 size;
 		public uint32 startIndex;
 		public IndexBufferHandle handle;
+		public uint8 isIndex16;
 	}
 	
 	[CRepr]
@@ -2122,6 +2128,7 @@ public static class bgfx
 		public TextureHandle handle;
 		public uint16 mip;
 		public uint16 layer;
+		public uint16 numLayers;
 		public uint8 resolve;
 	}
 	
@@ -2287,12 +2294,13 @@ public static class bgfx
 	///
 	/// <param name="_handle">Render target texture handle.</param>
 	/// <param name="_access">Access. See `Access::Enum`.</param>
-	/// <param name="_layer">Cubemap side or depth layer/slice.</param>
+	/// <param name="_layer">Cubemap side or depth layer/slice to use.</param>
+	/// <param name="_numLayers">Number of texture layer/slice(s) in array to use.</param>
 	/// <param name="_mip">Mip level.</param>
 	/// <param name="_resolve">Resolve flags. See: `BGFX_RESOLVE_*`</param>
 	///
 	[LinkName("bgfx_attachment_init")]
-	public static extern void attachment_init(Attachment* _this, TextureHandle _handle, Access _access, uint16 _layer, uint16 _mip, uint8 _resolve);
+	public static extern void attachment_init(Attachment* _this, TextureHandle _handle, Access _access, uint16 _layer, uint16 _numLayers, uint16 _mip, uint8 _resolve);
 	
 	/// <summary>
 	/// Start VertexLayout.
@@ -2835,9 +2843,10 @@ public static class bgfx
 	///
 	/// <param name="_tib">TransientIndexBuffer structure is filled and is valid for the duration of frame, and it can be reused for multiple draw calls.</param>
 	/// <param name="_num">Number of indices to allocate.</param>
+	/// <param name="_index32">Set to `true` if input indices will be 32-bit.</param>
 	///
 	[LinkName("bgfx_alloc_transient_index_buffer")]
-	public static extern void alloc_transient_index_buffer(TransientIndexBuffer* _tib, uint32 _num);
+	public static extern void alloc_transient_index_buffer(TransientIndexBuffer* _tib, uint32 _num, bool _index32);
 	
 	/// <summary>
 	/// Allocate transient vertex buffer.
