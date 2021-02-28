@@ -48,6 +48,7 @@
 
 #include "localintermediate.h"
 #include "../Include/InfoSink.h"
+#include "SymbolTable.h"
 
 namespace glslang {
 
@@ -306,9 +307,9 @@ void TIntermediate::mergeTrees(TInfoSink& infoSink, TIntermediate& unit)
     // Map by global name to unique ID to rationalize the same object having
     // differing IDs in different trees.
     TIdMaps idMaps;
-    int maxId;
-    seedIdMap(idMaps, maxId);
-    remapIds(idMaps, maxId + 1, unit);
+    long long idShift;
+    seedIdMap(idMaps, idShift);
+    remapIds(idMaps, idShift + 1, unit);
 
     mergeBodies(infoSink, globals, unitGlobals);
     mergeLinkerObjects(infoSink, linkerObjects, unitLinkerObjects);
@@ -329,14 +330,14 @@ static const TString& getNameForIdMap(TIntermSymbol* symbol)
 
 
 // Traverser that seeds an ID map with all built-ins, and tracks the
-// maximum ID used.
+// maximum ID used, currently using (maximum ID + 1) as new symbol id shift seed.
+// Level id will keep same after shifting.
 // (It would be nice to put this in a function, but that causes warnings
 // on having no bodies for the copy-constructor/operator=.)
 class TBuiltInIdTraverser : public TIntermTraverser {
 public:
-    TBuiltInIdTraverser(TIdMaps& idMaps) : idMaps(idMaps), maxId(0) { }
+    TBuiltInIdTraverser(TIdMaps& idMaps) : idMaps(idMaps), idShift(0) { }
     // If it's a built in, add it to the map.
-    // Track the max ID.
     virtual void visitSymbol(TIntermSymbol* symbol)
     {
         const TQualifier& qualifier = symbol->getType().getQualifier();
@@ -344,14 +345,16 @@ public:
             TShaderInterface si = symbol->getType().getShaderInterface();
             idMaps[si][getNameForIdMap(symbol)] = symbol->getId();
         }
-        maxId = std::max(maxId, symbol->getId());
+        idShift = (symbol->getId() & ~TSymbolTable::uniqueIdMask) |
+                std::max(idShift & TSymbolTable::uniqueIdMask,
+                         symbol->getId() & TSymbolTable::uniqueIdMask);
     }
-    int getMaxId() const { return maxId; }
+    long long getIdShift() const { return idShift; }
 protected:
     TBuiltInIdTraverser(TBuiltInIdTraverser&);
     TBuiltInIdTraverser& operator=(TBuiltInIdTraverser&);
     TIdMaps& idMaps;
-    int maxId;
+    long long idShift;
 };
 
 // Traverser that seeds an ID map with non-builtins.
@@ -377,12 +380,12 @@ protected:
 };
 
 // Initialize the the ID map with what we know of 'this' AST.
-void TIntermediate::seedIdMap(TIdMaps& idMaps, int& maxId)
+void TIntermediate::seedIdMap(TIdMaps& idMaps, long long& idShift)
 {
     // all built-ins everywhere need to align on IDs and contribute to the max ID
     TBuiltInIdTraverser builtInIdTraverser(idMaps);
     treeRoot->traverse(&builtInIdTraverser);
-    maxId = builtInIdTraverser.getMaxId();
+    idShift = builtInIdTraverser.getIdShift() & TSymbolTable::uniqueIdMask;
 
     // user variables in the linker object list need to align on ids
     TUserIdTraverser userIdTraverser(idMaps);
@@ -394,7 +397,7 @@ void TIntermediate::seedIdMap(TIdMaps& idMaps, int& maxId)
 // on having no bodies for the copy-constructor/operator=.)
 class TRemapIdTraverser : public TIntermTraverser {
 public:
-    TRemapIdTraverser(const TIdMaps& idMaps, int idShift) : idMaps(idMaps), idShift(idShift) { }
+    TRemapIdTraverser(const TIdMaps& idMaps, long long idShift) : idMaps(idMaps), idShift(idShift) { }
     // Do the mapping:
     //  - if the same symbol, adopt the 'this' ID
     //  - otherwise, ensure a unique ID by shifting to a new space
@@ -406,7 +409,9 @@ public:
             TShaderInterface si = symbol->getType().getShaderInterface();
             auto it = idMaps[si].find(getNameForIdMap(symbol));
             if (it != idMaps[si].end()) {
-                symbol->changeId(it->second);
+                uint64_t id = (symbol->getId() & ~TSymbolTable::uniqueIdMask) |
+                    (it->second & TSymbolTable::uniqueIdMask);
+                symbol->changeId(id);
                 remapped = true;
             }
         }
@@ -417,10 +422,10 @@ protected:
     TRemapIdTraverser(TRemapIdTraverser&);
     TRemapIdTraverser& operator=(TRemapIdTraverser&);
     const TIdMaps& idMaps;
-    int idShift;
+    long long idShift;
 };
 
-void TIntermediate::remapIds(const TIdMaps& idMaps, int idShift, TIntermediate& unit)
+void TIntermediate::remapIds(const TIdMaps& idMaps, long long idShift, TIntermediate& unit)
 {
     // Remap all IDs to either share or be unique, as dictated by the idMap and idShift.
     TRemapIdTraverser idTraverser(idMaps, idShift);
@@ -653,6 +658,25 @@ void TIntermediate::mergeErrorCheck(TInfoSink& infoSink, const TIntermSymbol& sy
 #endif
 }
 
+void TIntermediate::sharedBlockCheck(TInfoSink& infoSink)
+{
+    bool has_shared_block = false;
+    bool has_shared_non_block = false;
+    TIntermSequence& linkObjects = findLinkerObjects()->getSequence();
+    for (size_t i = 0; i < linkObjects.size(); ++i) {
+        const TType& type = linkObjects[i]->getAsTyped()->getType();
+        const TQualifier& qualifier = type.getQualifier();
+        if (qualifier.storage == glslang::EvqShared) {
+            if (type.getBasicType() == glslang::EbtBlock)
+                has_shared_block = true;
+            else
+                has_shared_non_block = true;
+        }
+    }
+    if (has_shared_block && has_shared_non_block)
+        error(infoSink, "cannot mix use of shared variables inside and outside blocks");
+}
+
 //
 // Do final link-time error checking of a complete (merged) intermediate representation.
 // (Much error checking was done during merging).
@@ -778,6 +802,7 @@ void TIntermediate::finalCheck(TInfoSink& infoSink, bool keepUncalled)
             error(infoSink, "post_depth_coverage requires early_fragment_tests");
         break;
     case EShLangCompute:
+        sharedBlockCheck(infoSink);
         break;
     case EShLangRayGen:
     case EShLangIntersect:
@@ -810,6 +835,7 @@ void TIntermediate::finalCheck(TInfoSink& infoSink, bool keepUncalled)
     case EShLangTaskNV:
         if (numTaskNVBlocks > 1)
             error(infoSink, "Only one taskNV interface block is allowed per shader");
+        sharedBlockCheck(infoSink);
         break;
     default:
         error(infoSink, "Unknown Stage.");

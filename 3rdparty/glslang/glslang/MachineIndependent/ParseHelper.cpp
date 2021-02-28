@@ -87,6 +87,10 @@ TParseContext::TParseContext(TSymbolTable& symbolTable, TIntermediate& interm, b
     globalInputDefaults.clear();
     globalOutputDefaults.clear();
 
+    globalSharedDefaults.clear();
+    globalSharedDefaults.layoutMatrix = ElmColumnMajor;
+    globalSharedDefaults.layoutPacking = ElpStd430;
+
 #ifndef GLSLANG_WEB
     // "Shaders in the transform
     // feedback capturing mode have an initial global default of
@@ -4292,8 +4296,10 @@ TSymbol* TParseContext::redeclareBuiltinVariable(const TSourceLoc& loc, const TS
         // If it wasn't at a built-in level, then it's already been redeclared;
         // that is, this is a redeclaration of a redeclaration; reuse that initial
         // redeclaration.  Otherwise, make the new one.
-        if (builtIn)
+        if (builtIn) {
             makeEditable(symbol);
+            symbolTable.amendSymbolIdLevel(*symbol);
+        }
 
         // Now, modify the type of the copy, as per the type of the current redeclaration.
 
@@ -4822,7 +4828,7 @@ void TParseContext::inductiveLoopCheck(const TSourceLoc& loc, TIntermNode* init,
     }
 
     // get the unique id of the loop index
-    int loopIndex = binaryInit->getLeft()->getAsSymbolNode()->getId();
+    long long loopIndex = binaryInit->getLeft()->getAsSymbolNode()->getId();
     inductiveLoopIds.insert(loopIndex);
 
     // condition's form must be "loop-index relational-operator constant-expression"
@@ -6033,12 +6039,28 @@ void TParseContext::layoutTypeCheck(const TSourceLoc& loc, const TType& type)
     }
 }
 
+static bool storageCanHaveLayoutInBlock(const enum TStorageQualifier storage)
+{
+    switch (storage) {
+    case EvqUniform:
+    case EvqBuffer:
+    case EvqShared:
+        return true;
+    default:
+        return false;
+    }
+}
+
 // Do layout error checking that can be done within a layout qualifier proper, not needing to know
 // if there are blocks, atomic counters, variables, etc.
 void TParseContext::layoutQualifierCheck(const TSourceLoc& loc, const TQualifier& qualifier)
 {
-    if (qualifier.storage == EvqShared && qualifier.hasLayout())
-        error(loc, "cannot apply layout qualifiers to a shared variable", "shared", "");
+    if (qualifier.storage == EvqShared && qualifier.hasLayout()) {
+        if (spvVersion.spv > 0 && spvVersion.spv < EShTargetSpv_1_4) {
+            error(loc, "shared block requires at least SPIR-V 1.4", "shared block", "");
+        }
+        profileRequires(loc, EEsProfile | ECoreProfile | ECompatibilityProfile, 0, E_GL_EXT_shared_memory_block, "shared block");
+    }
 
     // "It is a compile-time error to use *component* without also specifying the location qualifier (order does not matter)."
     if (qualifier.hasComponent() && ! qualifier.hasLocation())
@@ -6121,7 +6143,7 @@ void TParseContext::layoutQualifierCheck(const TSourceLoc& loc, const TQualifier
             error(loc, "can only be used on an output", "xfb layout qualifier", "");
     }
     if (qualifier.hasUniformLayout()) {
-        if (! qualifier.isUniformOrBuffer() && !qualifier.isTaskMemory()) {
+        if (!storageCanHaveLayoutInBlock(qualifier.storage) && !qualifier.isTaskMemory()) {
             if (qualifier.hasMatrix() || qualifier.hasPacking())
                 error(loc, "matrix or packing qualifiers can only be used on a uniform or buffer", "layout", "");
             if (qualifier.hasOffset() || qualifier.hasAlign())
@@ -6815,6 +6837,11 @@ TVariable* TParseContext::declareNonArray(const TSourceLoc& loc, const TString& 
 //
 TIntermNode* TParseContext::executeInitializer(const TSourceLoc& loc, TIntermTyped* initializer, TVariable* variable)
 {
+    // A null initializer is an aggregate that hasn't had an op assigned yet
+    // (still EOpNull, no relation to nullInit), and has no children.
+    bool nullInit = initializer->getAsAggregate() && initializer->getAsAggregate()->getOp() == EOpNull &&
+        initializer->getAsAggregate()->getSequence().size() == 0;
+
     //
     // Identifier must be of type constant, a global, or a temporary, and
     // starting at version 120, desktop allows uniforms to have initializers.
@@ -6822,9 +6849,36 @@ TIntermNode* TParseContext::executeInitializer(const TSourceLoc& loc, TIntermTyp
     TStorageQualifier qualifier = variable->getType().getQualifier().storage;
     if (! (qualifier == EvqTemporary || qualifier == EvqGlobal || qualifier == EvqConst ||
            (qualifier == EvqUniform && !isEsProfile() && version >= 120))) {
-        error(loc, " cannot initialize this type of qualifier ", variable->getType().getStorageQualifierString(), "");
+        if (qualifier == EvqShared) {
+            // GL_EXT_null_initializer allows this for shared, if it's a null initializer
+            if (nullInit) {
+                const char* feature = "initialization with shared qualifier";
+                profileRequires(loc, EEsProfile, 0, E_GL_EXT_null_initializer, feature);
+                profileRequires(loc, ~EEsProfile, 0, E_GL_EXT_null_initializer, feature);
+            } else {
+                error(loc, "initializer can only be a null initializer ('{}')", "shared", "");
+            }
+        } else {
+            error(loc, " cannot initialize this type of qualifier ",
+                  variable->getType().getStorageQualifierString(), "");
+            return nullptr;
+        }
+    }
+
+    if (nullInit) {
+        // only some types can be null initialized
+        if (variable->getType().containsUnsizedArray()) {
+            error(loc, "null initializers can't size unsized arrays", "{}", "");
+            return nullptr;
+        }
+        if (variable->getType().containsOpaque()) {
+            error(loc, "null initializers can't be used on opaque values", "{}", "");
+            return nullptr;
+        }
+        variable->getWritableType().getQualifier().setNullInit();
         return nullptr;
     }
+
     arrayObjectCheck(loc, variable->getType(), "array initializer");
 
     //
@@ -6868,13 +6922,15 @@ TIntermNode* TParseContext::executeInitializer(const TSourceLoc& loc, TIntermTyp
 
     // Uniforms require a compile-time constant initializer
     if (qualifier == EvqUniform && ! initializer->getType().getQualifier().isFrontEndConstant()) {
-        error(loc, "uniform initializers must be constant", "=", "'%s'", variable->getType().getCompleteString().c_str());
+        error(loc, "uniform initializers must be constant", "=", "'%s'",
+              variable->getType().getCompleteString().c_str());
         variable->getWritableType().getQualifier().makeTemporary();
         return nullptr;
     }
     // Global consts require a constant initializer (specialization constant is okay)
     if (qualifier == EvqConst && symbolTable.atGlobalLevel() && ! initializer->getType().getQualifier().isConstant()) {
-        error(loc, "global const initializers must be constant", "=", "'%s'", variable->getType().getCompleteString().c_str());
+        error(loc, "global const initializers must be constant", "=", "'%s'",
+              variable->getType().getCompleteString().c_str());
         variable->getWritableType().getQualifier().makeTemporary();
         return nullptr;
     }
@@ -6894,7 +6950,8 @@ TIntermNode* TParseContext::executeInitializer(const TSourceLoc& loc, TIntermTyp
         // "In declarations of global variables with no storage qualifier or with a const
         // qualifier any initializer must be a constant expression."
         if (symbolTable.atGlobalLevel() && ! initializer->getType().getQualifier().isConstant()) {
-            const char* initFeature = "non-constant global initializer (needs GL_EXT_shader_non_constant_global_initializers)";
+            const char* initFeature =
+                "non-constant global initializer (needs GL_EXT_shader_non_constant_global_initializers)";
             if (isEsProfile()) {
                 if (relaxedErrors() && ! extensionTurnedOn(E_GL_EXT_shader_non_constant_global_initializers))
                     warn(loc, "not allowed in this version", initFeature, "");
@@ -6908,7 +6965,8 @@ TIntermNode* TParseContext::executeInitializer(const TSourceLoc& loc, TIntermTyp
         // Compile-time tagging of the variable with its constant value...
 
         initializer = intermediate.addConversion(EOpAssign, variable->getType(), initializer);
-        if (! initializer || ! initializer->getType().getQualifier().isConstant() || variable->getType() != initializer->getType()) {
+        if (! initializer || ! initializer->getType().getQualifier().isConstant() ||
+            variable->getType() != initializer->getType()) {
             error(loc, "non-matching or non-convertible constant type for const initializer",
                   variable->getType().getStorageQualifierString(), "");
             variable->getWritableType().getQualifier().makeTemporary();
@@ -7631,6 +7689,7 @@ void TParseContext::declareBlock(const TSourceLoc& loc, TTypeList& typeList, con
     case EvqBuffer:     defaultQualification = globalBufferDefaults;     break;
     case EvqVaryingIn:  defaultQualification = globalInputDefaults;      break;
     case EvqVaryingOut: defaultQualification = globalOutputDefaults;     break;
+    case EvqShared:     defaultQualification = globalSharedDefaults;     break;
     default:            defaultQualification.clear();                    break;
     }
 
@@ -7894,6 +7953,12 @@ void TParseContext::blockStageIoCheck(const TSourceLoc& loc, const TQualifier& q
             error(loc, "output blocks cannot be used in a task shader", "out", "");
         }
         break;
+    case EvqShared:
+        if (spvVersion.spv > 0 && spvVersion.spv < EShTargetSpv_1_4) {
+            error(loc, "shared block requires at least SPIR-V 1.4", "shared block", "");
+        }
+        profileRequires(loc, EEsProfile | ECoreProfile | ECompatibilityProfile, 0, E_GL_EXT_shared_memory_block, "shared block");
+        break;
 #ifndef GLSLANG_WEB
     case EvqPayload:
         profileRequires(loc, ~EEsProfile, 460, 2, extsrt, "rayPayloadNV block");
@@ -8052,7 +8117,7 @@ void TParseContext::fixXfbOffsets(TQualifier& qualifier, TTypeList& typeList)
 //
 void TParseContext::fixBlockUniformOffsets(TQualifier& qualifier, TTypeList& typeList)
 {
-    if (!qualifier.isUniformOrBuffer() && !qualifier.isTaskMemory())
+    if (!storageCanHaveLayoutInBlock(qualifier.storage) && !qualifier.isTaskMemory())
         return;
     if (qualifier.layoutPacking != ElpStd140 && qualifier.layoutPacking != ElpStd430 && qualifier.layoutPacking != ElpScalar)
         return;
@@ -8566,8 +8631,14 @@ void TParseContext::updateStandaloneQualifierDefaults(const TSourceLoc& loc, con
         }
 #endif
         break;
+    case EvqShared:
+        if (qualifier.hasMatrix())
+            globalSharedDefaults.layoutMatrix = qualifier.layoutMatrix;
+        if (qualifier.hasPacking())
+            globalSharedDefaults.layoutPacking = qualifier.layoutPacking;
+        break;
     default:
-        error(loc, "default qualifier requires 'uniform', 'buffer', 'in', or 'out' storage qualification", "", "");
+        error(loc, "default qualifier requires 'uniform', 'buffer', 'in', 'out' or 'shared' storage qualification", "", "");
         return;
     }
 

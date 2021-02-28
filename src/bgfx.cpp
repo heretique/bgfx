@@ -1831,7 +1831,7 @@ namespace bgfx
 		m_init = _init;
 		m_init.resolution.reset &= ~BGFX_RESET_INTERNAL_FORCE;
 		m_init.resolution.numBackBuffers  = bx::clamp<uint8_t>(_init.resolution.numBackBuffers, 2, BGFX_CONFIG_MAX_BACK_BUFFERS);
-		m_init.resolution.maxFrameLatency = bx::min<uint8_t>(_init.resolution.maxFrameLatency, 3);
+		m_init.resolution.maxFrameLatency = bx::min<uint8_t>(_init.resolution.maxFrameLatency, BGFX_CONFIG_MAX_FRAME_LATENCY);
 		dump(m_init.resolution);
 
 		if (g_platformData.ndt          == NULL
@@ -2670,6 +2670,7 @@ namespace bgfx
 				}
 				else if (BX_ENABLED(BX_PLATFORM_LINUX) )
 				{
+					score += RendererType::Vulkan   == renderer ? 30 : 0;
 					score += RendererType::OpenGL   == renderer ? 20 : 0;
 					score += RendererType::OpenGLES == renderer ? 10 : 0;
 				}

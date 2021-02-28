@@ -3005,7 +3005,8 @@ namespace bgfx { namespace gl
 					GL_CHECK(glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS) );
 				}
 
-				if (s_extension[Extension::ARB_provoking_vertex].m_supported)
+				if (NULL != glProvokingVertex
+				&&  s_extension[Extension::ARB_provoking_vertex].m_supported)
 				{
 					GL_CHECK(glProvokingVertex(GL_FIRST_VERTEX_CONVENTION) );
 				}
@@ -6483,11 +6484,10 @@ namespace bgfx { namespace gl
 				GLsizei len;
 				char log[1024];
 				GL_CHECK(glGetShaderInfoLog(m_id, sizeof(log), &len, log) );
-				BX_TRACE("Failed to compile shader. %d: %s", compiled, log);
 
 				GL_CHECK(glDeleteShader(m_id) );
 				m_id = 0;
-				BGFX_FATAL(false, bgfx::Fatal::InvalidShader, "Failed to compile shader.");
+				BGFX_FATAL(false, bgfx::Fatal::InvalidShader, "Failed to compile shader. %d: %s", compiled, log);
 			}
 			else if (BX_ENABLED(BGFX_CONFIG_DEBUG)
 				 &&  s_extension[Extension::ANGLE_translated_shader_source].m_supported
