@@ -744,7 +744,8 @@ namespace spirv
 	/// The value is 100.
 	constexpr int s_GLSL_VULKAN_CLIENT_VERSION = 100;
 
-	static bool compile(const Options& _options, uint32_t _version, const std::string& _code, bx::WriterI* _writer, bool _firstPass)
+	static bool compile(const ShaderCompileOptions& _options, uint32_t _version, const std::string& _code,
+                        bx::WriterI* _writer, bool _firstPass)
 	{
 		BX_UNUSED(_version);
 
