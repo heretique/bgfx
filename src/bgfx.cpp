@@ -1237,7 +1237,7 @@ namespace bgfx
 		}
 
 		const uint32_t renderItemIdx = bx::atomicFetchAndAddsat<uint32_t>(&m_frame->m_numRenderItems, 1, BGFX_CONFIG_MAX_DRAW_CALLS);
-		if (BGFX_CONFIG_MAX_DRAW_CALLS-1 <= renderItemIdx)
+		if (BGFX_CONFIG_MAX_DRAW_CALLS <= renderItemIdx)
 		{
 			discard(_flags);
 			++m_numDropped;
@@ -1404,18 +1404,49 @@ namespace bgfx
 		for (uint32_t ii = 0; ii < BGFX_CONFIG_MAX_VIEWS; ++ii)
 		{
 			viewRemap[m_viewRemap[ii] ] = ViewId(ii);
+
+			View& view = s_ctx->m_view[ii];
+			Rect rect(0, 0, uint16_t(m_resolution.width), uint16_t(m_resolution.height) );
+
+			if (isValid(view.m_fbh) )
+			{
+				const FrameBufferRef& fbr = s_ctx->m_frameBufferRef[view.m_fbh.idx];
+				const BackbufferRatio::Enum bbRatio = fbr.m_window
+					? BackbufferRatio::Count
+					: BackbufferRatio::Enum(s_ctx->m_textureRef[fbr.un.m_th[0].idx].m_bbRatio)
+					;
+
+				if (BackbufferRatio::Count != bbRatio)
+				{
+					getTextureSizeFromRatio(bbRatio, rect.m_width, rect.m_height);
+				}
+				else
+				{
+					rect.m_width  = fbr.m_width;
+					rect.m_height = fbr.m_height;
+				}
+			}
+
+			view.m_rect.intersect(rect);
+
+			if (!view.m_scissor.isZero() )
+			{
+				view.m_scissor.intersect(rect);
+			}
 		}
 
 		for (uint32_t ii = 0, num = m_numRenderItems; ii < num; ++ii)
 		{
 			m_sortKeys[ii] = SortKey::remapView(m_sortKeys[ii], viewRemap);
 		}
+
 		bx::radixSort(m_sortKeys, s_ctx->m_tempKeys, m_sortValues, s_ctx->m_tempValues, m_numRenderItems);
 
 		for (uint32_t ii = 0, num = m_numBlitItems; ii < num; ++ii)
 		{
 			m_blitKeys[ii] = BlitKey::remapView(m_blitKeys[ii], viewRemap);
 		}
+
 		bx::radixSort(m_blitKeys, (uint32_t*)&s_ctx->m_tempKeys, m_numBlitItems);
 	}
 
@@ -4306,6 +4337,103 @@ namespace bgfx
 	void destroy(ProgramHandle _handle)
 	{
 		s_ctx->destroyProgram(_handle);
+	}
+
+	void checkFrameBuffer(uint8_t _num, const Attachment* _attachment)
+	{
+		uint8_t color = 0;
+		uint8_t depth = 0;
+
+		const TextureRef& firstTexture = s_ctx->m_textureRef[_attachment[0].handle.idx];
+
+		const uint16_t firstAttachmentWidth  = bx::max<uint16_t>(firstTexture.m_width  >> _attachment[0].mip, 1);
+		const uint16_t firstAttachmentHeight = bx::max<uint16_t>(firstTexture.m_height >> _attachment[0].mip, 1);
+		BX_UNUSED(firstAttachmentWidth, firstAttachmentHeight);
+
+		for (uint32_t ii = 0; ii < _num; ++ii)
+		{
+			const TextureHandle texHandle = _attachment[ii].handle;
+			BGFX_CHECK_HANDLE("createFrameBuffer texture", s_ctx->m_textureHandle, texHandle);
+			const TextureRef& tr = s_ctx->m_textureRef[texHandle.idx];
+
+			BX_ASSERT(_attachment[ii].mip < tr.m_numMips
+				, "Invalid texture mip level (%d > %d)."
+				, _attachment[ii].mip
+				, tr.m_numMips - 1
+				);
+
+			const uint16_t numLayers = tr.is3D()
+				? bx::max<uint16_t>(tr.m_depth >> _attachment[ii].mip, 1)
+				: tr.m_numLayers * (tr.isCubeMap() ? 6 : 1)
+				;
+			BX_UNUSED(numLayers);
+
+			BX_ASSERT( (_attachment[ii].layer + _attachment[ii].numLayers) <= numLayers
+				, "Invalid texture layer range (layer %d + num %d > total %d)."
+				, _attachment[ii].layer
+				, _attachment[ii].numLayers
+				, numLayers
+				);
+
+			BX_ASSERT(_attachment[0].numLayers == _attachment[ii].numLayers
+				, "Mismatch in attachment layer count (%d != %d)."
+				, _attachment[ii].numLayers
+				, _attachment[0].numLayers
+				);
+
+			BX_ASSERT(firstTexture.m_bbRatio == tr.m_bbRatio
+				, "Mismatch in texture back-buffer ratio."
+				);
+
+			BX_ASSERT(firstTexture.m_numSamples == tr.m_numSamples
+				, "Mismatch in texture sample count (%d != %d)."
+				, tr.m_numSamples
+				, firstTexture.m_numSamples
+				);
+
+			if (BackbufferRatio::Count == firstTexture.m_bbRatio)
+			{
+				const uint16_t width  = bx::max<uint16_t>(tr.m_width  >> _attachment[ii].mip, 1);
+				const uint16_t height = bx::max<uint16_t>(tr.m_height >> _attachment[ii].mip, 1);
+				BX_UNUSED(width, height);
+
+				BX_ASSERT(width == firstAttachmentWidth && height == firstAttachmentHeight
+					, "Mismatch in texture size (%dx%d != %dx%d)."
+					, width
+					, height
+					, firstAttachmentWidth, firstAttachmentHeight
+					);
+			}
+
+			if (bimg::isDepth(bimg::TextureFormat::Enum(tr.m_format) ) )
+			{
+				++depth;
+			}
+			else
+			{
+				++color;
+			}
+
+			BX_ASSERT(0 == (tr.m_flags & BGFX_TEXTURE_READ_BACK)
+				, "Frame buffer texture cannot be read back texture. Attachment %d: has flags 0x%016" PRIx64 "."
+				, ii
+				, tr.m_flags
+				);
+
+			BX_ASSERT(0 != (tr.m_flags & BGFX_TEXTURE_RT_MASK)
+				, "Frame buffer texture is not created with one of `BGFX_TEXTURE_RT*` flags. Attachment %d: has flags 0x%016" PRIx64 "."
+				, ii
+				, tr.m_flags
+				);
+		}
+
+		BX_ASSERT(true
+			&& color <= g_caps.limits.maxFBAttachments
+			&& depth <= 1
+			, "Too many frame buffer attachments (num attachments: %d, max color attachments %d)!"
+			, _num
+			, g_caps.limits.maxFBAttachments
+			);
 	}
 
 	static void isTextureValid(uint16_t _depth, bool _cubeMap, uint16_t _numLayers, TextureFormat::Enum _format, uint64_t _flags, bx::Error* _err)

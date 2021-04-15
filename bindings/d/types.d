@@ -197,7 +197,7 @@ enum ubyte BGFX_DISCARD_NONE = 0x00; /// Preserve everything.
 enum ubyte BGFX_DISCARD_BINDINGS = 0x01; /// Discard texture sampler and buffer bindings.
 enum ubyte BGFX_DISCARD_INDEX_BUFFER = 0x02; /// Discard index buffer.
 enum ubyte BGFX_DISCARD_INSTANCE_DATA = 0x04; /// Discard instance data.
-enum ubyte BGFX_DISCARD_STATE = 0x08; /// Discard state.
+enum ubyte BGFX_DISCARD_STATE = 0x08; /// Discard state and uniform bindings.
 enum ubyte BGFX_DISCARD_TRANSFORM = 0x10; /// Discard transform.
 enum ubyte BGFX_DISCARD_VERTEX_STREAMS = 0x20; /// Discard vertex streams.
 enum ubyte BGFX_DISCARD_ALL = 0xff; /// Discard all states.
@@ -941,7 +941,7 @@ struct bgfx_uniform_info_t
 /// Frame buffer texture attachment info.
 struct bgfx_attachment_t
 {
-	bgfx_access_t access; /// Attachement access. See `Access::Enum`.
+	bgfx_access_t access; /// Attachment access. See `Access::Enum`.
 	bgfx_texture_handle_t handle; /// Render target texture handle.
 	ushort mip; /// Mip level.
 	ushort layer; /// Cubemap side or depth layer/slice to use.
