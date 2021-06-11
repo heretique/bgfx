@@ -102,6 +102,7 @@ namespace bgfx
 		uint16_t regCount;
 		uint8_t texComponent;
 		uint8_t texDimension;
+		uint16_t texFormat;
 	};
 
 	typedef std::vector<Uniform> UniformArray;

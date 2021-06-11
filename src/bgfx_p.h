@@ -73,7 +73,6 @@ namespace bgfx
 #endif // BX_COMPILER_CLANG_ANALYZER
 
 	void trace(const char* _filePath, uint16_t _line, const char* _format, ...);
-	void checkFrameBuffer(uint8_t _num, const Attachment* _attachment);
 
 	inline bool operator==(const VertexLayoutHandle& _lhs, const VertexLayoutHandle& _rhs) { return _lhs.idx == _rhs.idx; }
 	inline bool operator==(const UniformHandle& _lhs,    const UniformHandle&    _rhs) { return _lhs.idx == _rhs.idx; }
@@ -109,11 +108,35 @@ namespace bgfx
 		}                                                                      \
 	BX_MACRO_BLOCK_END
 
+#define BGFX_ERROR_CHECK(_condition, _err, _result, _msg, _format, ...) \
+	if (!BX_IGNORE_C4127(_condition) )                                  \
+	{                                                                   \
+		BX_ERROR_SET(_err, _result, _msg);                              \
+		BX_TRACE("%.*s: 0x%08x '%.*s' - " _format                       \
+			, bxErrorScope.getName().getLength()                        \
+			, bxErrorScope.getName().getPtr()                           \
+			, _err->get().code                                          \
+			, _err->getMessage().getLength()                            \
+			, _err->getMessage().getPtr()                               \
+			, ##__VA_ARGS__                                             \
+			);                                                          \
+		return;                                                         \
+	}
+
+#define BGFX_ERROR_ASSERT(_err)            \
+	BX_ASSERT((_err)->isOk()               \
+		, "ERROR: 0x%08x '%.*s'."          \
+		, (_err)->get().code               \
+		, (_err)->getMessage().getLength() \
+		, (_err)->getMessage().getPtr()    \
+		);
+
 #include <bx/allocator.h>
 #include <bx/bx.h>
 #include <bx/cpu.h>
 #include <bx/debug.h>
 #include <bx/endian.h>
+#include <bx/error.h>
 #include <bx/float4x4_t.h>
 #include <bx/handlealloc.h>
 #include <bx/hash.h>
@@ -279,6 +302,7 @@ namespace bgfx
 	extern InternalData g_internalData;
 	extern PlatformData g_platformData;
 	extern bool g_platformDataChangedSinceReset;
+	extern void isFrameBufferValid(uint8_t _num, const Attachment* _attachment, bx::Error* _err);
 
 #if BGFX_CONFIG_MAX_DRAW_CALLS < (64<<10)
 	typedef uint16_t RenderItemCount;
@@ -2100,32 +2124,23 @@ namespace bgfx
 		{
 			m_cmdPre.finish();
 			m_cmdPost.finish();
-
-//			if (0 < m_numDropped)
-//			{
-//				BX_TRACE("Too many draw calls: %d, dropped %d (max: %d)"
-//					, m_numRenderItems+m_numDropped
-//					, m_numDropped
-//					, BGFX_CONFIG_MAX_DRAW_CALLS
-//					);
-//			}
 		}
 
 		void sort();
 
-		uint32_t getAvailTransientIndexBuffer(uint32_t _num)
+		uint32_t getAvailTransientIndexBuffer(uint32_t _num, uint16_t _indexSize)
 		{
-			uint32_t offset   = bx::strideAlign(m_iboffset, sizeof(uint16_t) );
-			uint32_t iboffset = offset + _num*sizeof(uint16_t);
+			const uint32_t offset = bx::strideAlign(m_iboffset, _indexSize);
+			uint32_t iboffset = offset + _num*_indexSize;
 			iboffset = bx::min<uint32_t>(iboffset, g_caps.limits.transientIbSize);
-			uint32_t num = (iboffset-offset)/sizeof(uint16_t);
+			const uint32_t num = (iboffset-offset)/_indexSize;
 			return num;
 		}
 
-		uint32_t allocTransientIndexBuffer(uint32_t& _num, uint32_t _indexSize)
+		uint32_t allocTransientIndexBuffer(uint32_t& _num, uint16_t _indexSize)
 		{
 			uint32_t offset = bx::strideAlign(m_iboffset, _indexSize);
-			uint32_t num    = getAvailTransientIndexBuffer(_num);
+			uint32_t num    = getAvailTransientIndexBuffer(_num, _indexSize);
 			m_iboffset = offset + num*_indexSize;
 			_num = num;
 
@@ -3690,11 +3705,13 @@ namespace bgfx
 			m_dynamicVertexBufferHandle.free(_handle.idx);
 		}
 
-		BGFX_API_FUNC(uint32_t getAvailTransientIndexBuffer(uint32_t _num) )
+		BGFX_API_FUNC(uint32_t getAvailTransientIndexBuffer(uint32_t _num, bool _index32) )
 		{
 			BGFX_MUTEX_SCOPE(m_resourceApiLock);
 
-			return m_submit->getAvailTransientIndexBuffer(_num);
+			const bool isIndex16     = !_index32;
+			const uint16_t indexSize = isIndex16 ? 2 : 4;
+			return m_submit->getAvailTransientIndexBuffer(_num, indexSize);
 		}
 
 		BGFX_API_FUNC(uint32_t getAvailTransientVertexBuffer(uint32_t _num, uint16_t _stride) )
@@ -3747,7 +3764,7 @@ namespace bgfx
 			BGFX_MUTEX_SCOPE(m_resourceApiLock);
 
 			const bool isIndex16     = !_index32;
-			const uint32_t indexSize = isIndex16 ? 2 : 4;
+			const uint16_t indexSize = isIndex16 ? 2 : 4;
 			const uint32_t offset    = m_submit->allocTransientIndexBuffer(_num, indexSize);
 
 			TransientIndexBuffer& tib = *m_submit->m_transientIb;
@@ -4014,6 +4031,12 @@ namespace bgfx
 				{
 					uint16_t texInfo;
 					bx::read(&reader, texInfo);
+				}
+
+				if (!isShaderVerLess(magic, 10) )
+				{
+					uint16_t texFormat = 0;
+					bx::read(&reader, texFormat);
 				}
 
 				PredefinedUniform::Enum predefined = nameToPredefinedUniformEnum(name);
@@ -4534,7 +4557,14 @@ namespace bgfx
 		{
 			BGFX_MUTEX_SCOPE(m_resourceApiLock);
 
-			checkFrameBuffer(_num, _attachment);
+			bx::Error err;
+			isFrameBufferValid(_num, _attachment, &err);
+			BGFX_ERROR_ASSERT(&err);
+
+			if (!err.isOk() )
+			{
+				return BGFX_INVALID_HANDLE;
+			}
 
 			FrameBufferHandle handle = { m_frameBufferHandle.alloc() };
 			BX_WARN(isValid(handle), "Failed to allocate frame buffer handle.");
